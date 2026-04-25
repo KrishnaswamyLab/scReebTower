@@ -3,7 +3,7 @@ import numpy as np
 from .graph import build_affinity_matrix
 from .filter import compute_diffusion_filter
 from .reeb import prepare_reeb, build_reeb_graph
-from .persistence import compute_edge_lengths, compute_graph_persistence
+from .edge_persistence import compute_edge_lengths, compute_graph_persistence
 from .simplify import (
     simplify_reeb_graph,
     assign_points_to_simplified_nodes,
