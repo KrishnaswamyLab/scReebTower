@@ -1,10 +1,14 @@
 # dReeb
 
-`dreeb` builds a discrete Reeb graph from a point cloud.
+`dreeb` builds a discrete Reeb graph from a point cloud or a precomputed
+affinity graph.
 
 The main entrypoint is `dreeb.dreeb()`. By default it returns the simplified
 graph only and skips optional work such as persistence, point assignment, edge
-assignment, and large intermediate outputs.
+assignment, and large intermediate outputs. Provide either `X` or `W`:
+
+- `X`: a point cloud, from which `dreeb` builds a kNN affinity graph
+- `W`: a precomputed affinity matrix, if you already have a better graph
 
 The scalar filter is the first nontrivial diffusion eigenfunction computed
 separately on each connected component of the affinity graph. You can choose a
@@ -52,6 +56,12 @@ graph = result["simplified"]
 nodes = graph["nodes"]
 edges = graph["edges"]
 beta1 = graph["beta1"]
+```
+
+Or, using a precomputed affinity matrix:
+
+```python
+result = dreeb(W=affinity_matrix)
 ```
 
 Default return:
@@ -107,7 +117,8 @@ stays stable.
 
 ```python
 result = dreeb(
-    X,
+    X=X,
+    # or W=affinity_matrix,
     diffusion_eigen_index=1,
     filter_method="diffusion_eigenfunction",
     diffusion_time="auto",
@@ -124,6 +135,9 @@ result = dreeb(
 
 - `return_raw=True`
   Include the raw graph under `result["raw"]`.
+- `W=affinity_matrix`
+  Use a precomputed affinity matrix instead of building one from `X`.
+  Provide exactly one of `X` or `W`.
 - `diffusion_eigen_index=1`
   Use the first nontrivial diffusion eigenfunction. Set `2`, `3`, ... to use
   later nontrivial diffusion eigenfunctions.
@@ -463,6 +477,7 @@ fig, node_pos = plot_dreeb(
 Practical notes:
 
 - `pts` must be a 2D or 3D embedding in the same row order as `X`
+- if you ran `dreeb(W=...)`, `pts` must instead match the row order of `W`
 - 2D multiedges are drawn as curved arcs so parallel edges are legible
 - cycle edges are colored crimson when `color_cycles=True`
 - node labels show multigraph degree when `label_degree=True`
@@ -471,7 +486,8 @@ Practical notes:
 ## Index Alignment
 
 `plot_dreeb()` assumes the embedding array `pts` is aligned row-for-row with the
-original data matrix `X` passed to `dreeb()`.
+nodes of the graph passed to `dreeb()`: the rows of `X` when using `X=...`, or
+the rows of `W` when using `W=...`.
 
 How node membership is recovered for plotting:
 

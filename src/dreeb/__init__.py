@@ -1,5 +1,5 @@
 from .dreeb import dreeb
-from .graph import build_affinity_matrix, build_diffusion_operator
+from .graph import build_affinity_matrix, build_diffusion_operator, validate_affinity_matrix
 from .filter import compute_diffusion_filter
 from .persistence import compute_edge_lengths, compute_graph_persistence
 from .reeb import prepare_reeb, build_reeb_graph
@@ -23,6 +23,7 @@ __all__ = [
     "extract_cellular_trajectory",
     "enumerate_terminal_cellular_trajectories",
     "build_affinity_matrix",
+    "validate_affinity_matrix",
     "build_diffusion_operator",
     "compute_diffusion_filter",
     "compute_edge_lengths",

@@ -96,6 +96,7 @@ def plot_dreeb(
     color_cycles=True,
     label_degree=True,
     figsize=(7, 6),
+    ax=None,
 ):
     """
     Visualize the simplified Reeb graph overlaid on embedding coordinates.
@@ -124,6 +125,9 @@ def plot_dreeb(
         If True, label each node with its multigraph degree
     figsize : tuple, optional (default: (7, 6))
         Figure size passed to matplotlib
+    ax : matplotlib axes, optional
+        Existing 2D or 3D axes to draw into. When omitted, a new figure
+        and axes are created.
 
     Returns
     -------
@@ -207,7 +211,10 @@ def plot_dreeb(
 
     # --- 5. draw ---
     if D == 2:
-        fig, ax = plt.subplots(figsize=figsize)
+        if ax is None:
+            fig, ax = plt.subplots(figsize=figsize)
+        else:
+            fig = ax.figure
         ax.scatter(pts[:, 0], pts[:, 1], s=3, alpha=0.15, color="gray")
 
         arc_base = 0.22
@@ -269,8 +276,11 @@ def plot_dreeb(
 
     else:
         from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
-        fig = plt.figure(figsize=figsize)
-        ax = fig.add_subplot(111, projection="3d")
+        if ax is None:
+            fig = plt.figure(figsize=figsize)
+            ax = fig.add_subplot(111, projection="3d")
+        else:
+            fig = ax.figure
         ax.scatter(pts[:, 0], pts[:, 1], pts[:, 2],
                    s=3, alpha=0.15, color="gray")
 
@@ -318,8 +328,8 @@ def plot_dreeb(
         ax.set_box_aspect(np.ptp(pts, axis=0) + 1e-12)
         ax.view_init(elev=20, azim=-58)
 
-    plt.tight_layout()
-    if "agg" not in plt.get_backend().lower():
+    fig.tight_layout()
+    if ax is None and "agg" not in plt.get_backend().lower():
         plt.show()
 
     return fig, node_pos

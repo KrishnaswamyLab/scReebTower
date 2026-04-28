@@ -1,6 +1,6 @@
 import numpy as np
 
-from .graph import build_affinity_matrix
+from .graph import build_affinity_matrix, validate_affinity_matrix
 from .filter import compute_diffusion_filter
 from .reeb import prepare_reeb, build_reeb_graph
 from .persistence import compute_edge_lengths, compute_graph_persistence
@@ -15,7 +15,8 @@ from .simplify import (
 
 
 def dreeb(
-    X,
+    X=None,
+    W=None,
     k=80,
     precision=1.0,
     diffusion_eigen_index=1,
@@ -37,8 +38,11 @@ def dreeb(
 
     Parameters
     ----------
-    X : array-like, shape (n_samples, n_features)
-        Input point cloud data
+    X : array-like, shape (n_samples, n_features), optional
+        Input point cloud data. Provide exactly one of `X` or `W`.
+    W : array-like or scipy.sparse matrix, shape (n_samples, n_samples), optional
+        Precomputed affinity matrix. Larger values represent stronger
+        connections. Provide exactly one of `X` or `W`.
     k : int, optional (default: 80)
         Number of nearest neighbors
     precision : float, optional (default: 1.0)
@@ -102,7 +106,16 @@ def dreeb(
             "return_cellular_decomposition=True requires simplify=True."
         )
 
-    W = build_affinity_matrix(X, k=k)
+    if (X is None) == (W is None):
+        raise ValueError("Provide exactly one of X or W.")
+
+    if W is None:
+        W = build_affinity_matrix(X, k=k)
+        num_points = int(np.asarray(X).shape[0])
+    else:
+        W = validate_affinity_matrix(W)
+        num_points = int(W.shape[0])
+
     (
         filter_values,
         components,
@@ -209,7 +222,7 @@ def dreeb(
                 step_vertices=step_vertices,
                 step_comp_ids=step_comp_ids,
                 uniq_v=prep_state["uniq_v"],
-                num_points=X.shape[0],
+                num_points=num_points,
             )
             simp_section["point_edge_assignment"] = simp_point_edge_assignment
             simp_section["point_edges"] = simp_point_edges
@@ -267,7 +280,7 @@ def dreeb(
                     step_vertices=step_vertices,
                     step_comp_ids=step_comp_ids,
                     uniq_v=prep_state["uniq_v"],
-                    num_points=X.shape[0],
+                    num_points=num_points,
                 )
                 simp_section["point_edge_assignment"] = simp_point_edge_assignment
                 simp_section["point_edges"] = simp_point_edges

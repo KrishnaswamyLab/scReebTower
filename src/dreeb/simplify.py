@@ -391,6 +391,34 @@ def simplify_reeb_graph(reeb_nodes, reeb_edges, return_paths=False):
             return [], np.array([]), 0, 0, [], []
         return [], np.array([]), 0, 0
 
+    def _follow_degree_two_chain(start_keep, first_mid, keep_mask, visited_mid):
+        prev = int(start_keep)
+        curr = int(first_mid)
+        edge_path = []
+        node_path = [int(start_keep), int(first_mid)]
+        visited_mid[curr] = True
+
+        while True:
+            nbrs = adj[curr]
+            if len(nbrs) != 2:
+                return None, node_path, edge_path
+
+            (n0, e0), (n1, e1) = nbrs
+            if n1 == prev:
+                nxt, next_eid = n0, e0
+            else:
+                nxt, next_eid = n1, e1
+
+            edge_path.append(int(next_eid))
+            prev, curr = curr, int(nxt)
+            node_path.append(curr)
+
+            if keep_mask[curr]:
+                return curr, node_path, edge_path
+            if deg[curr] != 2 or visited_mid[curr]:
+                return None, node_path, edge_path
+            visited_mid[curr] = True
+
     # build adjacency with raw edge ids preserved
     adj = [[] for _ in range(num_nodes)]
     for eid, (u, v) in enumerate(reeb_edges):
@@ -402,6 +430,35 @@ def simplify_reeb_graph(reeb_nodes, reeb_edges, return_paths=False):
     keep = (deg != 2)
     if not np.any(keep):
         keep[0] = True
+
+    # Prevent cycles from collapsing into self-loops by keeping one
+    # extra degree-2 breakpoint on any cycle attached to a single kept node.
+    while True:
+        changed = False
+        visited_mid = np.zeros(num_nodes, dtype=bool)
+        for u_old in np.flatnonzero(keep):
+            for v_old, _ in adj[u_old]:
+                if keep[v_old] or deg[v_old] != 2 or visited_mid[v_old]:
+                    continue
+                end_keep, node_path, _ = _follow_degree_two_chain(
+                    start_keep=u_old,
+                    first_mid=v_old,
+                    keep_mask=keep,
+                    visited_mid=visited_mid,
+                )
+                if end_keep == u_old and len(node_path) >= 4:
+                    split_idx = len(node_path) // 2
+                    split_node = int(node_path[split_idx])
+                    if split_node == u_old:
+                        split_node = int(node_path[1])
+                    if not keep[split_node]:
+                        keep[split_node] = True
+                        changed = True
+                        break
+            if changed:
+                break
+        if not changed:
+            break
 
     keep_ids = np.flatnonzero(keep)
     old2new = -np.ones(num_nodes, dtype=int)
@@ -425,33 +482,23 @@ def simplify_reeb_graph(reeb_nodes, reeb_edges, return_paths=False):
                     simp_node_paths.append([int(u_old), int(v_old)])
                 continue
             if (not keep[v_old]) and deg[v_old] == 2 and not visited_mid[v_old]:
-                prev = u_old
-                curr = v_old
-                path = [int(eid0)]
-                node_path = [int(u_old), int(v_old)]
-                visited_mid[curr] = True
-                while True:
-                    nbrs = adj[curr]
-                    (n0, e0), (n1, e1) = nbrs
-                    if n1 == prev:
-                        nxt, next_eid = n0, e0
-                    else:
-                        nxt, next_eid = n1, e1
-                    path.append(int(next_eid))
-                    prev, curr = curr, nxt
-                    node_path.append(int(curr))
-                    if keep[curr]:
-                        v_new = old2new[curr]
-                        if u_new != v_new:
-                            simp_edges.append((u_new, v_new))
-                        else:
-                            simp_edges.append((u_new, u_new))
-                        simp_edge_paths.append(path.copy())
-                        simp_node_paths.append(node_path.copy())
-                        break
-                    if deg[curr] != 2 or visited_mid[curr]:
-                        break
-                    visited_mid[curr] = True
+                end_keep, node_path, path = _follow_degree_two_chain(
+                    start_keep=u_old,
+                    first_mid=v_old,
+                    keep_mask=keep,
+                    visited_mid=visited_mid,
+                )
+                path = [int(eid0)] + path
+                if end_keep is not None:
+                    v_new = old2new[end_keep]
+                    if u_new == v_new:
+                        raise RuntimeError(
+                            "simplify_reeb_graph produced a self-loop after "
+                            "cycle breakpoint insertion."
+                        )
+                    simp_edges.append((u_new, v_new))
+                    simp_edge_paths.append(path.copy())
+                    simp_node_paths.append(node_path.copy())
 
     simp_edges = [(int(u), int(v)) for u, v in simp_edges]
     simp_num_nodes = len(keep_ids)

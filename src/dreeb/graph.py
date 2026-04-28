@@ -95,6 +95,49 @@ def build_affinity_matrix(X, k, n_jobs=-1):
     
     return W
 
+
+def validate_affinity_matrix(W):
+    """
+    Validate and normalize a user-supplied affinity matrix.
+
+    Parameters
+    ----------
+    W : array-like or scipy.sparse matrix, shape (n_samples, n_samples)
+        Weighted adjacency / affinity matrix. Larger values represent
+        stronger connections.
+
+    Returns
+    -------
+    scipy.sparse.csr_matrix
+        Symmetrized CSR affinity matrix with zero diagonal.
+    """
+    if W is None:
+        raise ValueError("W must not be None.")
+
+    if not sp.isspmatrix(W):
+        W = sp.csr_matrix(np.asarray(W, dtype=float))
+    else:
+        W = W.tocsr().astype(float)
+
+    if W.ndim != 2 or W.shape[0] != W.shape[1]:
+        raise ValueError(
+            "W must be a square affinity matrix with shape (n_samples, n_samples)."
+        )
+
+    if W.shape[0] == 0:
+        raise ValueError("W must have at least one node.")
+
+    if W.data.size > 0 and np.any(~np.isfinite(W.data)):
+        raise ValueError("W contains non-finite edge weights.")
+
+    if W.data.size > 0 and np.any(W.data < 0):
+        raise ValueError("W must have nonnegative edge weights.")
+
+    W = W.maximum(W.T)
+    W.setdiag(0)
+    W.eliminate_zeros()
+    return W
+
 def build_diffusion_operator(W):
     W = W.tocsr().astype(float)
     degrees = np.array(W.sum(axis=1)).ravel()
@@ -109,4 +152,3 @@ def build_diffusion_operator(W):
     Q_inv = sp.diags(1.0 / (degrees + np.finfo(float).eps))
     P = Q_inv @ W
     return P
-
