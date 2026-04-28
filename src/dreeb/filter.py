@@ -164,11 +164,12 @@ def compute_diffusion_filter(
         eigenfunction, `2` means the second, and so on.
     precision : float, optional (default: 1.0)
         Controls quantization. 1.0 = no quantization, 0.1 = 10% of unique levels.
-    filter_method : {"diffusion_eigenfunction", "rooted_potential_distance"}, optional
+    filter_method : {"diffusion_eigenfunction", "rooted_potential_distance",
+                     "rooted_diffusion_shortest_path"}, optional
         Scalar filter construction method.
     diffusion_time : {"auto"} or int, optional (default: "auto")
         Diffusion time used by `rooted_potential_distance`. Ignored for
-        `diffusion_eigenfunction`.
+        `diffusion_eigenfunction` and `rooted_diffusion_shortest_path`.
     diffusion_time_max : int, optional (default: 40)
         Maximum time tested by the PHATE-style entropy knee heuristic when
         `diffusion_time="auto"`.
@@ -186,6 +187,8 @@ def compute_diffusion_filter(
         Per-component auxiliary values. For `diffusion_eigenfunction`, these
         are the selected diffusion eigenvalues. For
         `rooted_potential_distance`, these are the selected diffusion times.
+        For `rooted_diffusion_shortest_path`, these are zeros because no
+        diffusion-time power is used.
     metadata : dict, optional
         Returned only when `return_metadata=True`.
     """
@@ -199,10 +202,15 @@ def compute_diffusion_filter(
     diffusion_eigen_index = int(diffusion_eigen_index)
     if diffusion_eigen_index < 1:
         raise ValueError("diffusion_eigen_index must be >= 1.")
-    if filter_method not in ("diffusion_eigenfunction", "rooted_potential_distance"):
+    if filter_method not in (
+        "diffusion_eigenfunction",
+        "rooted_potential_distance",
+        "rooted_diffusion_shortest_path",
+    ):
         raise ValueError(
-            "filter_method must be 'diffusion_eigenfunction' or "
-            "'rooted_potential_distance'."
+            "filter_method must be 'diffusion_eigenfunction', "
+            "'rooted_potential_distance', or "
+            "'rooted_diffusion_shortest_path'."
         )
 
     N = W.shape[0]
@@ -216,6 +224,8 @@ def compute_diffusion_filter(
     }
     if filter_method == "diffusion_eigenfunction":
         metadata["component_eigenvalues"] = aux_values
+    elif filter_method == "rooted_potential_distance":
+        metadata["component_diffusion_times"] = aux_values
     else:
         metadata["component_diffusion_times"] = aux_values
 
@@ -250,6 +260,27 @@ def compute_diffusion_filter(
             rooted = np.linalg.norm(potential - potential[int(root_local)], axis=1)
             filter_values[nodes] = _normalize_zero_one(rooted)
             aux_values[ci] = float(t)
+            metadata["component_root_indices"][ci] = int(nodes[int(root_local)])
+            metadata["component_root_pairs"][ci] = (
+                int(nodes[int(root_pair_local[0])]),
+                int(nodes[int(root_pair_local[1])]),
+            )
+            continue
+
+        if filter_method == "rooted_diffusion_shortest_path":
+            diff_op = np.asarray(build_diffusion_operator(W_sub).toarray(), dtype=float)
+            cost_graph = _build_diffused_cost_graph(W_sub, diff_op)
+            root_local, root_pair_local = _choose_two_sweep_root(cost_graph)
+            rooted = dijkstra(cost_graph, directed=False, indices=int(root_local))
+            rooted = np.asarray(rooted, dtype=float)
+            finite = np.isfinite(rooted)
+            if not np.any(finite):
+                filter_values[nodes] = 0.0
+            else:
+                fill_value = float(np.max(rooted[finite]))
+                rooted[~finite] = fill_value
+                filter_values[nodes] = _normalize_zero_one(rooted)
+            aux_values[ci] = 0.0
             metadata["component_root_indices"][ci] = int(nodes[int(root_local)])
             metadata["component_root_pairs"][ci] = (
                 int(nodes[int(root_pair_local[0])]),

@@ -10,11 +10,16 @@ assignment, and large intermediate outputs. Provide either `X` or `W`:
 - `X`: a point cloud, from which `dreeb` builds a kNN affinity graph
 - `W`: a precomputed affinity matrix, if you already have a better graph
 
+You can also optionally provide `filter_values` to use your own scalar filter
+instead of the built-in diffusion-based filters.
+
 The scalar filter is the first nontrivial diffusion eigenfunction computed
 separately on each connected component of the affinity graph. You can choose a
 later nontrivial eigenfunction with `diffusion_eigen_index`. As an
 alternative, you can use a rooted PHATE-style potential-distance filter with
-`filter_method="rooted_potential_distance"`.
+`filter_method="rooted_potential_distance"` or a rooted diffusion
+shortest-path filter with
+`filter_method="rooted_diffusion_shortest_path"`.
 
 For the rooted potential-distance filter, `dreeb`:
 
@@ -25,6 +30,14 @@ For the rooted potential-distance filter, `dreeb`:
 - chooses a root by two-sweep Dijkstra on the original sparse graph with edge
   costs derived from `P^t`
 - uses rooted PHATE-style potential distance as the scalar filter
+
+For the rooted diffusion shortest-path filter, `dreeb`:
+
+- builds the row-stochastic diffusion operator on each connected component
+- builds a diffusion cost graph on the original sparse graph directly from `P`
+- chooses a root by two-sweep Dijkstra on that cost graph
+- uses shortest-path distance from the root on that cost graph as the scalar
+  filter
 
 ## Installation
 
@@ -62,6 +75,12 @@ Or, using a precomputed affinity matrix:
 
 ```python
 result = dreeb(W=affinity_matrix)
+```
+
+Or, using a precomputed affinity matrix and a custom scalar filter:
+
+```python
+result = dreeb(W=affinity_matrix, filter_values=my_filter)
 ```
 
 Default return:
@@ -119,6 +138,7 @@ stays stable.
 result = dreeb(
     X=X,
     # or W=affinity_matrix,
+    # or W=affinity_matrix, filter_values=my_filter,
     diffusion_eigen_index=1,
     filter_method="diffusion_eigenfunction",
     diffusion_time="auto",
@@ -138,16 +158,25 @@ result = dreeb(
 - `W=affinity_matrix`
   Use a precomputed affinity matrix instead of building one from `X`.
   Provide exactly one of `X` or `W`.
+- `filter_values=my_filter`
+  Use a user-supplied scalar filter on graph vertices. When provided,
+  `dreeb` skips built-in filter construction and uses this vector directly.
 - `diffusion_eigen_index=1`
   Use the first nontrivial diffusion eigenfunction. Set `2`, `3`, ... to use
-  later nontrivial diffusion eigenfunctions.
+  later nontrivial diffusion eigenfunctions. Ignored when
+  `filter_values` is provided.
 - `filter_method="diffusion_eigenfunction"`
   Use the default diffusion-eigenfunction scalar filter, or set
   `filter_method="rooted_potential_distance"` to use a rooted PHATE-style
-  potential-distance filter.
+  potential-distance filter, or
+  `filter_method="rooted_diffusion_shortest_path"` to use shortest-path
+  distance from a root on the diffusion cost graph built directly from `P`.
+  Ignored when `filter_values` is provided.
 - `diffusion_time="auto"`
   When using `filter_method="rooted_potential_distance"`, select diffusion
   time with the entropy-knee heuristic. You can also pass an explicit integer.
+  Ignored for `rooted_diffusion_shortest_path` and when `filter_values` is
+  provided.
 - `return_edge_lengths=True`
   Return filter-space edge lengths in the graph sections that are present.
 - `return_simp_persistence=True`
@@ -197,6 +226,21 @@ result = dreeb(
     filter_method="rooted_potential_distance",
     diffusion_time="auto",
 )
+```
+
+Use rooted diffusion shortest-path:
+
+```python
+result = dreeb(
+    X,
+    filter_method="rooted_diffusion_shortest_path",
+)
+```
+
+Use a custom scalar filter:
+
+```python
+result = dreeb(W=affinity_matrix, filter_values=my_filter)
 ```
 
 Simplified graph plus node assignment:
@@ -262,10 +306,14 @@ per-component diffusion times.
 
 ## Filter Modes
 
-`dreeb()` supports two scalar filter constructions:
+`dreeb()` supports three scalar filter constructions:
 
 - `filter_method="diffusion_eigenfunction"`
 - `filter_method="rooted_potential_distance"`
+- `filter_method="rooted_diffusion_shortest_path"`
+
+Or you can bypass filter construction entirely by passing
+`filter_values=...` into `dreeb()`.
 
 `diffusion_eigenfunction`:
 
@@ -283,9 +331,21 @@ per-component diffusion times.
   `result["intermediates"]["filter_metadata"]` when
   `return_intermediates=True`
 
+`rooted_diffusion_shortest_path`:
+
+- computed separately on each connected component of the affinity graph
+- builds the row-stochastic diffusion operator `P`
+- builds a diffusion cost graph on the original sparse graph using
+  `-log(0.5 * (P_ij + P_ji))`
+- chooses a root by two-sweep Dijkstra on that cost graph
+- uses shortest-path distance from the root on that cost graph as the scalar
+  filter
+- ignores `diffusion_time`
+
 Important note:
 
 - changing `diffusion_time` affects `rooted_potential_distance`
+- it does not affect `rooted_diffusion_shortest_path`
 - it does not meaningfully change the default single-eigenfunction filter,
   because powering the diffusion operator changes eigenvalues but not
   eigenvectors

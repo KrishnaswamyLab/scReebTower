@@ -115,6 +115,31 @@ def test_rooted_potential_distance_filter_runs_through_main_api():
     assert filter_metadata["component_root_pairs"].shape == (len(intermediates["components"]), 2)
 
 
+def test_rooted_diffusion_shortest_path_filter_runs_through_main_api():
+    X = sample_line()
+    result = dreeb(
+        X,
+        k=8,
+        filter_method="rooted_diffusion_shortest_path",
+        return_intermediates=True,
+    )
+
+    simplified = result["simplified"]
+    intermediates = result["intermediates"]
+
+    assert result["primary_graph"] == "simplified"
+    assert len(simplified["nodes"]) >= 1
+    assert len(simplified["edges"]) >= 0
+    assert intermediates["filter_method"] == "rooted_diffusion_shortest_path"
+    assert "diffusion_eigenvalues" not in intermediates
+    assert intermediates["filter_values"].shape == (X.shape[0],)
+
+    filter_metadata = intermediates["filter_metadata"]
+    assert filter_metadata["filter_method"] == "rooted_diffusion_shortest_path"
+    assert filter_metadata["component_root_indices"].shape[0] == len(intermediates["components"])
+    assert filter_metadata["component_root_pairs"].shape == (len(intermediates["components"]), 2)
+
+
 def test_precomputed_affinity_matrix_runs_through_main_api():
     X = sample_line()
     W = build_affinity_matrix(X, k=8)
@@ -143,6 +168,12 @@ def test_dreeb_requires_exactly_one_of_x_or_w():
     except ValueError as exc:
         assert "exactly one of X or W" in str(exc)
 
+    try:
+        dreeb(X=X, W=W)
+        assert False, "expected ValueError when both X and W are provided"
+    except ValueError as exc:
+        assert "exactly one of X or W" in str(exc)
+
 
 def test_cycle_with_stick_graph_simplifies_without_self_loops():
     W, _ = sample_cycle_with_stick_graph()
@@ -155,8 +186,23 @@ def test_cycle_with_stick_graph_simplifies_without_self_loops():
     assert simplified["beta1"] == 1
     assert all(int(u) != int(v) for u, v in edges)
 
-    try:
-        dreeb(X=X, W=W)
-        assert False, "expected ValueError when both X and W are provided"
-    except ValueError as exc:
-        assert "exactly one of X or W" in str(exc)
+
+def test_custom_filter_values_run_through_main_api():
+    W, _ = sample_cycle_with_stick_graph()
+    n = W.shape[0]
+    custom_filter = np.linspace(0.0, 1.0, n)
+
+    result = dreeb(
+        W=W,
+        filter_values=custom_filter,
+        return_raw=True,
+        return_intermediates=True,
+    )
+
+    intermediates = result["intermediates"]
+    assert result["primary_graph"] == "simplified"
+    assert intermediates["filter_method"] == "custom"
+    assert intermediates["filter_metadata"]["filter_method"] == "custom"
+    assert intermediates["filter_values"].shape == (n,)
+    assert np.allclose(intermediates["filter_values"], custom_filter)
+    assert "diffusion_eigenvalues" not in intermediates

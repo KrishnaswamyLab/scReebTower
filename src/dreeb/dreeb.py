@@ -1,7 +1,8 @@
 import numpy as np
+from scipy.sparse.csgraph import connected_components
 
 from .graph import build_affinity_matrix, validate_affinity_matrix
-from .filter import compute_diffusion_filter
+from .filter import compute_diffusion_filter, _quantize_filter_values
 from .reeb import prepare_reeb, build_reeb_graph
 from .persistence import compute_edge_lengths, compute_graph_persistence
 from .simplify import (
@@ -17,6 +18,7 @@ from .simplify import (
 def dreeb(
     X=None,
     W=None,
+    filter_values=None,
     k=80,
     precision=1.0,
     diffusion_eigen_index=1,
@@ -43,6 +45,10 @@ def dreeb(
     W : array-like or scipy.sparse matrix, shape (n_samples, n_samples), optional
         Precomputed affinity matrix. Larger values represent stronger
         connections. Provide exactly one of `X` or `W`.
+    filter_values : array-like, shape (n_samples,), optional
+        User-supplied scalar filter on graph vertices. When provided,
+        `dreeb` uses this filter directly instead of constructing one
+        with `filter_method`.
     k : int, optional (default: 80)
         Number of nearest neighbors
     precision : float, optional (default: 1.0)
@@ -51,19 +57,28 @@ def dreeb(
     diffusion_eigen_index : int, optional (default: 1)
         One-based index of the nontrivial diffusion eigenfunction to use
         per connected component. `1` means the first nontrivial
-        diffusion eigenfunction, `2` the second, and so on.
-    filter_method : {"diffusion_eigenfunction", "rooted_potential_distance"}, optional
+        diffusion eigenfunction, `2` the second, and so on. Ignored when
+        `filter_values` is provided.
+    filter_method : {"diffusion_eigenfunction", "rooted_potential_distance",
+                     "rooted_diffusion_shortest_path"}, optional
         Scalar filter construction method. The default uses a single
         nontrivial diffusion eigenfunction. The rooted potential-distance
         option uses a PHATE-style potential distance from an automatically
-        selected root in each connected component.
+        selected root in each connected component. The rooted diffusion
+        shortest-path option uses Dijkstra distance from an automatically
+        selected root on the diffusion cost graph built directly from `P`.
+        Ignored when `filter_values` is provided.
     diffusion_time : {"auto"} or int, optional (default: "auto")
         Diffusion time for `filter_method="rooted_potential_distance"`.
-        Ignored for `diffusion_eigenfunction`.
+        Ignored for `diffusion_eigenfunction`,
+        `rooted_diffusion_shortest_path`, and when `filter_values` is
+        provided.
     diffusion_time_max : int, optional (default: 40)
         Maximum time tested by the entropy-knee heuristic when
         `diffusion_time="auto"` and
-        `filter_method="rooted_potential_distance"`.
+        `filter_method="rooted_potential_distance"`. Ignored for
+        `rooted_diffusion_shortest_path` and when `filter_values` is
+        provided.
     simplify : bool, optional (default: True)
         If True, simplify the Reeb graph by contracting degree-2 chains.
     return_raw : bool, optional (default: False)
@@ -116,20 +131,45 @@ def dreeb(
         W = validate_affinity_matrix(W)
         num_points = int(W.shape[0])
 
-    (
-        filter_values,
-        components,
-        filter_aux_values,
-        filter_metadata,
-    ) = compute_diffusion_filter(
-        W,
-        diffusion_eigen_index=diffusion_eigen_index,
-        precision=precision,
-        filter_method=filter_method,
-        diffusion_time=diffusion_time,
-        diffusion_time_max=diffusion_time_max,
-        return_metadata=True,
-    )
+    if filter_values is None:
+        (
+            filter_values,
+            components,
+            filter_aux_values,
+            filter_metadata,
+        ) = compute_diffusion_filter(
+            W,
+            diffusion_eigen_index=diffusion_eigen_index,
+            precision=precision,
+            filter_method=filter_method,
+            diffusion_time=diffusion_time,
+            diffusion_time_max=diffusion_time_max,
+            return_metadata=True,
+        )
+        filter_method_used = filter_method
+    else:
+        filter_values = np.asarray(filter_values, dtype=float)
+        if filter_values.ndim != 1 or filter_values.shape[0] != num_points:
+            raise ValueError(
+                "filter_values must be a 1D array with length equal to the number "
+                "of graph vertices."
+            )
+        if not np.all(np.isfinite(filter_values)):
+            raise ValueError("filter_values must contain only finite values.")
+
+        filter_values = _quantize_filter_values(filter_values, precision)
+        A = ((W + W.T) > 0).astype(np.int8).tocsr()
+        A.setdiag(0)
+        A.eliminate_zeros()
+        ncomp, comp_labels = connected_components(A, directed=False)
+        components = [np.where(comp_labels == c)[0] for c in range(ncomp)]
+        filter_aux_values = np.full(len(components), np.nan, dtype=float)
+        filter_metadata = {
+            "filter_method": "custom",
+            "component_root_indices": np.full(len(components), -1, dtype=int),
+            "component_root_pairs": np.full((len(components), 2), -1, dtype=int),
+        }
+        filter_method_used = "custom"
 
     prep_state = prepare_reeb(W, filter_values)
     reeb_nodes, reeb_edges, step_vertices, step_comp_ids = build_reeb_graph(prep_state)
@@ -395,7 +435,7 @@ def dreeb(
         result["intermediates"] = {
             "W": W,
             "components": components,
-            "filter_method": filter_method,
+            "filter_method": filter_method_used,
             "diffusion_eigen_index": int(diffusion_eigen_index),
             "filter_aux_values": filter_aux_values,
             "filter_metadata": filter_metadata,
@@ -404,7 +444,7 @@ def dreeb(
             "step_vertices": step_vertices,
             "step_comp_ids": step_comp_ids,
         }
-        if filter_method == "diffusion_eigenfunction":
+        if filter_method_used == "diffusion_eigenfunction":
             result["intermediates"]["diffusion_eigenvalues"] = filter_aux_values
 
     return result
