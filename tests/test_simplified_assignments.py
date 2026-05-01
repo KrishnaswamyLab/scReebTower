@@ -206,3 +206,78 @@ def test_custom_filter_values_run_through_main_api():
     assert intermediates["filter_values"].shape == (n,)
     assert np.allclose(intermediates["filter_values"], custom_filter)
     assert "diffusion_eigenvalues" not in intermediates
+
+
+def test_diffusion_smoothing_t_zero_is_a_noop():
+    X = sample_line()
+    expected_W = build_affinity_matrix(X, k=8)
+
+    result = dreeb(
+        X,
+        k=8,
+        t=0,
+        return_intermediates=True,
+    )
+
+    intermediates = result["intermediates"]
+
+    assert intermediates["smoothing_t"] == 0
+    assert intermediates["smoothing_applied"] is False
+    assert intermediates["smoothing_k"] is None
+    assert np.allclose(intermediates["X_smoothed"], X)
+    assert (intermediates["W"] != expected_W).nnz == 0
+
+
+def test_diffusion_smoothing_auto_rebuilds_affinity_from_smoothed_points():
+    X = sample_line()
+
+    result = dreeb(
+        X,
+        k=8,
+        t="auto",
+        return_intermediates=True,
+    )
+
+    intermediates = result["intermediates"]
+    rebuilt_W = build_affinity_matrix(intermediates["X_smoothed"], k=8)
+    expected_k_smooth = int(np.ceil(np.sqrt(X.shape[0])))
+
+    assert 1 <= intermediates["smoothing_t"] <= 100
+    assert intermediates["smoothing_applied"] is True
+    assert intermediates["smoothing_k"] == expected_k_smooth
+    assert not np.allclose(intermediates["X_smoothed"], X)
+    assert (intermediates["W"] != rebuilt_W).nnz == 0
+
+
+def test_diffusion_smoothing_accepts_explicit_k_smooth():
+    X = sample_line()
+
+    result = dreeb(
+        X,
+        k=8,
+        k_smooth=12,
+        t=1,
+        return_intermediates=True,
+    )
+
+    intermediates = result["intermediates"]
+
+    assert intermediates["smoothing_k"] == 12
+    assert intermediates["smoothing_t"] == 1
+    assert intermediates["smoothing_applied"] is True
+
+
+def test_diffusion_smoothing_is_rejected_for_precomputed_affinity():
+    W, _ = sample_cycle_with_stick_graph()
+
+    try:
+        dreeb(W=W, t=1)
+        assert False, "expected ValueError when t>0 is used with W"
+    except ValueError as exc:
+        assert "only supported when X is provided" in str(exc)
+
+    try:
+        dreeb(W=W, t="auto")
+        assert False, "expected ValueError when t='auto' is used with W"
+    except ValueError as exc:
+        assert "requires X" in str(exc)

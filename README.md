@@ -13,6 +13,15 @@ assignment, and large intermediate outputs. Provide either `X` or `W`:
 You can also optionally provide `filter_values` to use your own scalar filter
 instead of the built-in diffusion-based filters.
 
+You can also optionally provide `t` to apply diffusion smoothing to the point
+cloud before the affinity graph is built. Set `t=0` to disable smoothing, or
+`t="auto"` to choose a smoothing time from the PHATE-style Von Neumann entropy
+elbow. This preprocessing step affects the full downstream pipeline.
+You can also optionally provide `k_smooth` to set the neighborhood size used
+only for the smoothing diffusion operator. If omitted, it defaults to
+`ceil(sqrt(n_samples))` when smoothing is enabled. The final DReeb graph still
+uses the public `k`.
+
 The scalar filter is the first nontrivial diffusion eigenfunction computed
 separately on each connected component of the affinity graph. You can choose a
 later nontrivial eigenfunction with `diffusion_eigen_index`. As an
@@ -139,6 +148,9 @@ result = dreeb(
     X=X,
     # or W=affinity_matrix,
     # or W=affinity_matrix, filter_values=my_filter,
+    t=0,
+    k_smooth=None,
+    t_max=100,
     diffusion_eigen_index=1,
     filter_method="diffusion_eigenfunction",
     diffusion_time="auto",
@@ -161,6 +173,17 @@ result = dreeb(
 - `filter_values=my_filter`
   Use a user-supplied scalar filter on graph vertices. When provided,
   `dreeb` skips built-in filter construction and uses this vector directly.
+- `t=0`
+  Apply diffusion smoothing to the input point cloud before graph
+  construction. Set `0` to disable smoothing, pass an integer `t > 0` to use
+  `P^t X`, or pass `t="auto"` to choose a smoothing time from the PHATE-style
+  entropy elbow.
+- `k_smooth=None`
+  Neighborhood size used only to build the smoothing diffusion operator.
+  If omitted and smoothing is enabled, the default is `ceil(sqrt(n_samples))`.
+  This is separate from the public `k` used for the final Reeb graph.
+- `t_max=100`
+  Maximum time tested by the entropy-knee heuristic when `t="auto"`.
 - `diffusion_eigen_index=1`
   Use the first nontrivial diffusion eigenfunction. Set `2`, `3`, ... to use
   later nontrivial diffusion eigenfunctions. Ignored when

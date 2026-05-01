@@ -100,9 +100,9 @@ def _find_knee_point(y, x=None):
 
 def _select_diffusion_time(diff_op, diffusion_time, diffusion_time_max):
     if diffusion_time == "auto":
-        ts = np.arange(int(diffusion_time_max))
+        ts = np.arange(1, int(diffusion_time_max) + 1)
         entropy = _compute_von_neumann_entropy(diff_op, t_max=int(diffusion_time_max))
-        return _find_knee_point(y=entropy, x=ts)
+        return max(1, _find_knee_point(y=entropy, x=ts))
 
     diffusion_time = int(diffusion_time)
     if diffusion_time < 0:

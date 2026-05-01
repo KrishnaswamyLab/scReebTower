@@ -1,8 +1,9 @@
 import numpy as np
+import scipy.sparse as sp
 from scipy.sparse.csgraph import connected_components
 
-from .graph import build_affinity_matrix, validate_affinity_matrix
-from .filter import compute_diffusion_filter, _quantize_filter_values
+from .graph import build_affinity_matrix, build_diffusion_operator, validate_affinity_matrix
+from .filter import compute_diffusion_filter, _quantize_filter_values, _select_diffusion_time
 from .reeb import prepare_reeb, build_reeb_graph
 from .persistence import compute_edge_lengths, compute_graph_persistence
 from .simplify import (
@@ -20,7 +21,10 @@ def dreeb(
     W=None,
     filter_values=None,
     k=80,
+    k_smooth=None,
     precision=1.0,
+    t=0,
+    t_max=100,
     diffusion_eigen_index=1,
     filter_method="diffusion_eigenfunction",
     diffusion_time="auto",
@@ -51,9 +55,20 @@ def dreeb(
         with `filter_method`.
     k : int, optional (default: 80)
         Number of nearest neighbors
+    k_smooth : int, optional
+        Neighborhood size used only for diffusion smoothing when
+        `t != 0` or `t="auto"`. If omitted, defaults to
+        `ceil(sqrt(n_samples))` for the input point cloud.
     precision : float, optional (default: 1.0)
         Controls filter quantization. 1.0 = no quantization,
         0.1 = 10% of unique levels
+    t : int or "auto", optional (default: 0)
+        Diffusion smoothing time applied to the point cloud before graph
+        construction. `0` disables smoothing. When `"auto"`, select a
+        diffusion time from the Von Neumann entropy elbow of the kNN
+        diffusion operator.
+    t_max : int, optional (default: 100)
+        Maximum time tested by the entropy-knee heuristic when `t="auto"`.
     diffusion_eigen_index : int, optional (default: 1)
         One-based index of the nontrivial diffusion eigenfunction to use
         per connected component. `1` means the first nontrivial
@@ -124,12 +139,65 @@ def dreeb(
     if (X is None) == (W is None):
         raise ValueError("Provide exactly one of X or W.")
 
+    W_initial = None
+    P_initial = None
+
     if W is None:
-        W = build_affinity_matrix(X, k=k)
-        num_points = int(np.asarray(X).shape[0])
+        if sp.isspmatrix(X):
+            X = X.toarray()
+        X = np.asarray(X, dtype=float)
+        if X.ndim != 2:
+            raise ValueError("X must be a 2D array-like point cloud.")
+
+        smoothing_k = k_smooth
+        if t == "auto":
+            if int(t_max) < 3:
+                raise ValueError("t_max must be >= 3 when t='auto'.")
+            if smoothing_k is None:
+                smoothing_k = int(np.ceil(np.sqrt(X.shape[0])))
+            smoothing_k = int(max(1, smoothing_k))
+            W_initial = build_affinity_matrix(X, k=smoothing_k)
+            P_initial = build_diffusion_operator(W_initial)
+            t_resolved = _select_diffusion_time(
+                P_initial.toarray(),
+                diffusion_time="auto",
+                diffusion_time_max=int(t_max),
+            )
+        else:
+            t_resolved = int(t)
+            if t_resolved < 0:
+                raise ValueError("t must be >= 0 or 'auto'.")
+            if t_resolved > 0:
+                if smoothing_k is None:
+                    smoothing_k = int(np.ceil(np.sqrt(X.shape[0])))
+                smoothing_k = int(max(1, smoothing_k))
+                W_initial = build_affinity_matrix(X, k=smoothing_k)
+            else:
+                W_initial = None
+            P_initial = build_diffusion_operator(W_initial) if W_initial is not None else None
+
+        if t_resolved > 0:
+            X_smoothed = X.copy()
+            for _ in range(int(t_resolved)):
+                X_smoothed = P_initial @ X_smoothed
+            X_smoothed = np.asarray(X_smoothed, dtype=float)
+            W = build_affinity_matrix(X_smoothed, k=k)
+            smoothing_applied = True
+        else:
+            X_smoothed = X.copy()
+            W = build_affinity_matrix(X, k=k)
+            smoothing_applied = False
+        num_points = int(X.shape[0])
     else:
         W = validate_affinity_matrix(W)
         num_points = int(W.shape[0])
+        if t == "auto":
+            raise ValueError("t='auto' requires X so diffusion smoothing can be applied to the point cloud.")
+        t_resolved = int(t)
+        if t_resolved != 0:
+            raise ValueError("t != 0 is only supported when X is provided.")
+        X_smoothed = None
+        smoothing_applied = False
 
     if filter_values is None:
         (
@@ -432,7 +500,7 @@ def dreeb(
         result["raw"] = raw_section
 
     if return_intermediates:
-        result["intermediates"] = {
+        intermediates = {
             "W": W,
             "components": components,
             "filter_method": filter_method_used,
@@ -443,8 +511,18 @@ def dreeb(
             "prep_state": prep_state,
             "step_vertices": step_vertices,
             "step_comp_ids": step_comp_ids,
+            "smoothing_t": int(t_resolved),
+            "smoothing_t_requested": t,
+            "smoothing_k": int(smoothing_k) if W_initial is not None else None,
+            "smoothing_applied": bool(smoothing_applied),
         }
+        if X_smoothed is not None:
+            intermediates["X_smoothed"] = X_smoothed
+        if W_initial is not None:
+            intermediates["W_initial"] = W_initial
+            intermediates["P_initial"] = P_initial
         if filter_method_used == "diffusion_eigenfunction":
-            result["intermediates"]["diffusion_eigenvalues"] = filter_aux_values
+            intermediates["diffusion_eigenvalues"] = filter_aux_values
+        result["intermediates"] = intermediates
 
     return result
