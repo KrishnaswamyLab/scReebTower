@@ -1,6 +1,6 @@
-# dReeb
+# scReebTower
 
-`dreeb` builds a discrete Reeb graph from a point cloud or a precomputed
+`scReebTower` builds a discrete Reeb graph from a point cloud or a precomputed
 affinity graph.
 
 The main entrypoint is `dreeb.dreeb()`. By default it returns the simplified
