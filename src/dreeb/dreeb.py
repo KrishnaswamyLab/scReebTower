@@ -16,6 +16,92 @@ from .simplify import (
 )
 
 
+def _robust_point_cloud_scale(X):
+    """Cheap robust scale used to normalize condensation displacements."""
+
+    X = np.asarray(X, dtype=float)
+    if X.size == 0:
+        return 1.0
+    center = np.median(X, axis=0)
+    distances = np.linalg.norm(X - center, axis=1)
+    positive = distances[np.isfinite(distances) & (distances > 0.0)]
+    if positive.size == 0:
+        return 1.0
+    scale = float(np.median(positive))
+    if not np.isfinite(scale) or scale <= 0.0:
+        return 1.0
+    return scale
+
+
+def _diffusion_condense_point_cloud(
+    X,
+    k_smooth,
+    num_levels,
+    diffusion_power,
+    *,
+    ell_auto=False,
+    ell_max=20,
+    condensation_tol=1e-3,
+    condensation_patience=2,
+):
+    """Iteratively recompute diffusion operators and smooth the point cloud."""
+
+    X_current = np.asarray(X, dtype=float).copy()
+    history = []
+    scale = _robust_point_cloud_scale(X_current)
+    stable_count = 0
+    stop_reason = "fixed_levels"
+    max_levels = int(ell_max) if ell_auto else int(num_levels)
+
+    if max_levels < 0:
+        raise ValueError("number of condensation levels must be nonnegative.")
+    if int(diffusion_power) <= 0 and max_levels > 0:
+        raise ValueError("diffusion_power must be positive when condensation levels are requested.")
+    if ell_auto:
+        if int(ell_max) < 1:
+            raise ValueError("ell_max must be positive when ell='auto'.")
+        if float(condensation_tol) < 0.0:
+            raise ValueError("condensation_tol must be nonnegative.")
+        if int(condensation_patience) < 1:
+            raise ValueError("condensation_patience must be at least 1.")
+
+    for level in range(max_levels):
+        W_step = build_affinity_matrix(X_current, k=int(k_smooth))
+        P_step = build_diffusion_operator(W_step)
+        X_next = X_current
+        for _ in range(int(diffusion_power)):
+            X_next = P_step @ X_next
+        X_next = np.asarray(X_next, dtype=float)
+        displacement = np.linalg.norm(X_next - X_current, axis=1)
+        mean_displacement = float(np.mean(displacement))
+        normalized_mean_displacement = float(mean_displacement / scale)
+        history.append(
+            {
+                "level": int(level + 1),
+                "mode": "condensation",
+                "diffusion_power": int(diffusion_power),
+                "mean_displacement": mean_displacement,
+                "normalized_mean_displacement": normalized_mean_displacement,
+                "max_displacement": float(np.max(displacement)),
+                "affinity_nnz": int(W_step.nnz),
+            }
+        )
+        X_current = X_next
+
+        if ell_auto:
+            if normalized_mean_displacement < float(condensation_tol):
+                stable_count += 1
+            else:
+                stable_count = 0
+            if stable_count >= int(condensation_patience):
+                stop_reason = "stabilized"
+                break
+
+    if ell_auto and stop_reason != "stabilized":
+        stop_reason = "ell_max"
+    return X_current, history, stop_reason
+
+
 def dreeb(
     X=None,
     W=None,
@@ -24,7 +110,12 @@ def dreeb(
     k_smooth=None,
     precision=1.0,
     t=0,
+    ell=None,
     t_max=100,
+    smoothing_mode="fixed_operator",
+    ell_max=20,
+    condensation_tol=1e-3,
+    condensation_patience=2,
     diffusion_eigen_index=1,
     filter_method="diffusion_eigenfunction",
     diffusion_time="auto",
@@ -66,9 +157,33 @@ def dreeb(
         Diffusion smoothing time applied to the point cloud before graph
         construction. `0` disables smoothing. When `"auto"`, select a
         diffusion time from the Von Neumann entropy elbow of the kNN
-        diffusion operator.
+        diffusion operator. In condensation mode, this is the diffusion power
+        applied at each condensation level.
+    ell : int, optional
+        Number of diffusion-condensation levels when
+        `smoothing_mode="condensation"`. Pass `"auto"` to iterate until the
+        normalized mean displacement stabilizes. At level `r`, the
+        stabilization statistic is the mean point displacement from
+        `X^(r)` to `X^(r+1)`, normalized by a robust scale of the original point
+        cloud. If omitted, defaults to `1` when `t != 0` or `t="auto"` and to
+        `0` when `t=0`.
     t_max : int, optional (default: 100)
         Maximum time tested by the entropy-knee heuristic when `t="auto"`.
+    smoothing_mode : {"fixed_operator", "condensation"}, optional
+        Diffusion smoothing mode used when `t != 0` or `t="auto"`.
+        `"fixed_operator"` preserves the historical behavior and computes
+        `X_smoothed = P^t X` using one diffusion operator built from the
+        original point cloud. `"condensation"` recomputes the affinity graph
+        and diffusion operator at every smoothing step:
+        `X^{(r+1)} = P_r^t X^{(r)}`.
+    ell_max : int, optional (default: 20)
+        Maximum number of condensation levels when `ell="auto"`.
+    condensation_tol : float, optional (default: 1e-3)
+        Stabilization threshold for `ell="auto"`, applied to normalized mean
+        displacement between consecutive condensation levels.
+    condensation_patience : int, optional (default: 2)
+        Number of consecutive stable condensation levels required to stop when
+        `ell="auto"`.
     diffusion_eigen_index : int, optional (default: 1)
         One-based index of the nontrivial diffusion eigenfunction to use
         per connected component. `1` means the first nontrivial
@@ -139,8 +254,16 @@ def dreeb(
     if (X is None) == (W is None):
         raise ValueError("Provide exactly one of X or W.")
 
+    if smoothing_mode not in {"fixed_operator", "condensation"}:
+        raise ValueError(
+            "smoothing_mode must be one of {'fixed_operator', 'condensation'}."
+        )
+
     W_initial = None
     P_initial = None
+    smoothing_history = []
+    ell_resolved = None
+    condensation_stop_reason = None
 
     if W is None:
         if sp.isspmatrix(X):
@@ -176,17 +299,64 @@ def dreeb(
                 W_initial = None
             P_initial = build_diffusion_operator(W_initial) if W_initial is not None else None
 
-        if t_resolved > 0:
-            X_smoothed = X.copy()
-            for _ in range(int(t_resolved)):
-                X_smoothed = P_initial @ X_smoothed
-            X_smoothed = np.asarray(X_smoothed, dtype=float)
+        ell_auto = ell == "auto"
+        if ell is None:
+            ell_resolved = 1 if (smoothing_mode == "condensation" and int(t_resolved) > 0) else 0
+        elif ell_auto:
+            ell_resolved = None
+        else:
+            ell_resolved = int(ell)
+            if ell_resolved < 0:
+                raise ValueError("ell must be nonnegative.")
+
+        if smoothing_mode == "fixed_operator" and ell is not None:
+            raise ValueError("ell is only used with smoothing_mode='condensation'.")
+        if smoothing_mode == "condensation" and (ell_auto or ell_resolved > 0) and int(t_resolved) <= 0:
+            raise ValueError("condensation requires t > 0 or t='auto' when ell > 0.")
+
+        if (
+            smoothing_mode == "fixed_operator"
+            and int(t_resolved) > 0
+        ) or (
+            smoothing_mode == "condensation"
+            and (ell_auto or ell_resolved > 0)
+        ):
+            if smoothing_mode == "fixed_operator":
+                X_smoothed = X.copy()
+                for step in range(int(t_resolved)):
+                    X_next = P_initial @ X_smoothed
+                    displacement = np.linalg.norm(X_next - X_smoothed, axis=1)
+                    smoothing_history.append(
+                        {
+                            "step": int(step + 1),
+                            "mode": "fixed_operator",
+                            "mean_displacement": float(np.mean(displacement)),
+                            "max_displacement": float(np.max(displacement)),
+                            "affinity_nnz": int(W_initial.nnz),
+                        }
+                    )
+                    X_smoothed = X_next
+                X_smoothed = np.asarray(X_smoothed, dtype=float)
+                condensation_stop_reason = None
+            else:
+                X_smoothed, smoothing_history, condensation_stop_reason = _diffusion_condense_point_cloud(
+                    X=X,
+                    k_smooth=int(smoothing_k),
+                    num_levels=0 if ell_auto else int(ell_resolved),
+                    diffusion_power=int(t_resolved),
+                    ell_auto=bool(ell_auto),
+                    ell_max=int(ell_max),
+                    condensation_tol=float(condensation_tol),
+                    condensation_patience=int(condensation_patience),
+                )
+                ell_resolved = len(smoothing_history)
             W = build_affinity_matrix(X_smoothed, k=k)
             smoothing_applied = True
         else:
             X_smoothed = X.copy()
             W = build_affinity_matrix(X, k=k)
             smoothing_applied = False
+            condensation_stop_reason = None
         num_points = int(X.shape[0])
     else:
         W = validate_affinity_matrix(W)
@@ -196,6 +366,12 @@ def dreeb(
         t_resolved = int(t)
         if t_resolved != 0:
             raise ValueError("t != 0 is only supported when X is provided.")
+        if smoothing_mode != "fixed_operator":
+            raise ValueError("smoothing_mode != 'fixed_operator' is only supported when X is provided and t != 0.")
+        if ell is not None:
+            raise ValueError("ell is only supported when X is provided.")
+        ell_resolved = 0
+        condensation_stop_reason = None
         X_smoothed = None
         smoothing_applied = False
 
@@ -513,8 +689,16 @@ def dreeb(
             "step_comp_ids": step_comp_ids,
             "smoothing_t": int(t_resolved),
             "smoothing_t_requested": t,
+            "condensation_levels": int(ell_resolved) if ell_resolved is not None else None,
+            "condensation_levels_requested": ell,
+            "condensation_ell_max": int(ell_max),
+            "condensation_tol": float(condensation_tol),
+            "condensation_patience": int(condensation_patience),
+            "condensation_stop_reason": condensation_stop_reason,
             "smoothing_k": int(smoothing_k) if W_initial is not None else None,
+            "smoothing_mode": smoothing_mode,
             "smoothing_applied": bool(smoothing_applied),
+            "smoothing_history": smoothing_history,
         }
         if X_smoothed is not None:
             intermediates["X_smoothed"] = X_smoothed

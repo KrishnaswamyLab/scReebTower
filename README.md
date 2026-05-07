@@ -16,7 +16,13 @@ instead of the built-in diffusion-based filters.
 You can also optionally provide `t` to apply diffusion smoothing to the point
 cloud before the affinity graph is built. Set `t=0` to disable smoothing, or
 `t="auto"` to choose a smoothing time from the PHATE-style Von Neumann entropy
-elbow. This preprocessing step affects the full downstream pipeline.
+elbow. This preprocessing step affects the full downstream pipeline. By
+default, smoothing uses the historical fixed-operator mode,
+`X_smoothed = P^t X`. To run iterative diffusion condensation, set
+`smoothing_mode="condensation"` and choose the tower level with `ell`; this
+recomputes the affinity graph and diffusion operator at every level,
+`X^{(r+1)} = P_r^t X^{(r)}`. You can also pass `ell="auto"` to stop when
+the normalized mean displacement between condensation levels stabilizes.
 You can also optionally provide `k_smooth` to set the neighborhood size used
 only for the smoothing diffusion operator. If omitted, it defaults to
 `ceil(sqrt(n_samples))` when smoothing is enabled. The final DReeb graph still
@@ -149,7 +155,12 @@ result = dreeb(
     # or W=affinity_matrix,
     # or W=affinity_matrix, filter_values=my_filter,
     t=0,
+    ell=None,
     k_smooth=None,
+    smoothing_mode="fixed_operator",
+    ell_max=20,
+    condensation_tol=1e-3,
+    condensation_patience=2,
     t_max=100,
     diffusion_eigen_index=1,
     filter_method="diffusion_eigenfunction",
@@ -176,8 +187,36 @@ result = dreeb(
 - `t=0`
   Apply diffusion smoothing to the input point cloud before graph
   construction. Set `0` to disable smoothing, pass an integer `t > 0` to use
-  `P^t X`, or pass `t="auto"` to choose a smoothing time from the PHATE-style
-  entropy elbow.
+  diffusion smoothing, or pass `t="auto"` to choose a smoothing time from the
+  PHATE-style entropy elbow. In condensation mode, `t` is the diffusion power
+  applied at each tower level.
+- `ell=None`
+  Number of diffusion-condensation levels when
+  `smoothing_mode="condensation"`. For example, `ell=3, t=2` applies three
+  condensation levels, each using `P_ell^2` before recomputing the diffusion
+  operator for the next level. Pass `ell="auto"` to iterate until the
+  condensation process stabilizes. If omitted in condensation mode, `ell`
+  defaults to `1` when smoothing is enabled.
+- `smoothing_mode="fixed_operator"`
+  Smoothing mode used when `t > 0` or `t="auto"`. The default
+  `"fixed_operator"` computes `X_smoothed = P^t X` using one diffusion
+  operator built from the original point cloud, preserving historical behavior.
+  Set `"condensation"` to recompute the smoothing affinity graph and diffusion
+  operator at every tower level:
+  `X^{(r+1)} = P_r^t X^{(r)}`.
+- `ell_max=20`
+  Maximum number of condensation levels when `ell="auto"`.
+- `condensation_tol=1e-3`
+  Stabilization threshold for `ell="auto"`. At condensation level `r`, dreeb
+  computes
+  `delta_r = mean_i ||X_i^(r+1) - X_i^(r)||_2 / median_i ||X_i^(0) - median(X^(0))||_2`.
+  A level is considered stable when `delta_r < condensation_tol`.
+- `condensation_patience=2`
+  Number of consecutive stable condensation levels required before
+  `ell="auto"` stops. If stabilization is not reached, condensation stops at
+  `ell_max`. The chosen level count and stop reason are returned in
+  `result["intermediates"]["condensation_levels"]` and
+  `result["intermediates"]["condensation_stop_reason"]`.
 - `k_smooth=None`
   Neighborhood size used only to build the smoothing diffusion operator.
   If omitted and smoothing is enabled, the default is `ceil(sqrt(n_samples))`.
