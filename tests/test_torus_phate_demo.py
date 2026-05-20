@@ -8,8 +8,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import phate
 
-from scReebTower import scReebTower
-from scReebTower.visualize import plot_scReebTower
+from sc_reeb_tower import scReebTower
+from sc_reeb_tower.visualize import plot_scReebTower
 
 
 def sample_torus(n=800, R=2.0, r=0.7, seed=0):

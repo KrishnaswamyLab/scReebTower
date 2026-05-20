@@ -1,6 +1,6 @@
 import numpy as np
 
-from scReebTower import scReebTower, extract_cellular_trajectory, build_affinity_matrix
+from sc_reeb_tower import scReebTower, extract_cellular_trajectory, build_affinity_matrix
 import scipy.sparse as sp
 
 
