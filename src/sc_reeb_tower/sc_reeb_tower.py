@@ -102,7 +102,7 @@ def _diffusion_condense_point_cloud(
     return X_current, history, stop_reason
 
 
-def dreeb(
+def scReebTower(
     X=None,
     W=None,
     filter_values=None,
@@ -131,7 +131,7 @@ def dreeb(
     return_intermediates=False,
 ):
     """
-    Run the full dReeb pipeline.
+    Run the full scReebTower pipeline.
 
     Parameters
     ----------
@@ -142,7 +142,7 @@ def dreeb(
         connections. Provide exactly one of `X` or `W`.
     filter_values : array-like, shape (n_samples,), optional
         User-supplied scalar filter on graph vertices. When provided,
-        `dreeb` uses this filter directly instead of constructing one
+        `sc_reeb_tower` uses this filter directly instead of constructing one
         with `filter_method`.
     k : int, optional (default: 80)
         Number of nearest neighbors

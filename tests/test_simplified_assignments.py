@@ -1,6 +1,6 @@
 import numpy as np
 
-from dreeb import dreeb, extract_cellular_trajectory, build_affinity_matrix
+from screebTower import screebTower, extract_cellular_trajectory, build_affinity_matrix
 import scipy.sparse as sp
 
 
@@ -43,7 +43,7 @@ def sample_cycle_with_stick_graph(cycle_nodes=18, stick_nodes=8):
 
 def test_simplified_node_and_edge_assignments_cover_dataset():
     X = sample_line()
-    result = dreeb(
+    result = screebTower(
         X,
         k=8,
         simplify=True,
@@ -92,7 +92,7 @@ def test_simplified_node_and_edge_assignments_cover_dataset():
 
 def test_rooted_potential_distance_filter_runs_through_main_api():
     X = sample_line()
-    result = dreeb(
+    result = screebTower(
         X,
         k=8,
         filter_method="rooted_potential_distance",
@@ -117,7 +117,7 @@ def test_rooted_potential_distance_filter_runs_through_main_api():
 
 def test_rooted_diffusion_shortest_path_filter_runs_through_main_api():
     X = sample_line()
-    result = dreeb(
+    result = screebTower(
         X,
         k=8,
         filter_method="rooted_diffusion_shortest_path",
@@ -144,7 +144,7 @@ def test_precomputed_affinity_matrix_runs_through_main_api():
     X = sample_line()
     W = build_affinity_matrix(X, k=8)
 
-    result = dreeb(
+    result = screebTower(
         W=W,
         simplify=True,
         return_raw=True,
@@ -158,18 +158,18 @@ def test_precomputed_affinity_matrix_runs_through_main_api():
     assert result["intermediates"]["filter_values"].shape == (X.shape[0],)
 
 
-def test_dreeb_requires_exactly_one_of_x_or_w():
+def test_screebTower_requires_exactly_one_of_x_or_w():
     X = sample_line()
     W = build_affinity_matrix(X, k=8)
 
     try:
-        dreeb()
+        screebTower()
         assert False, "expected ValueError when neither X nor W is provided"
     except ValueError as exc:
         assert "exactly one of X or W" in str(exc)
 
     try:
-        dreeb(X=X, W=W)
+        screebTower(X=X, W=W)
         assert False, "expected ValueError when both X and W are provided"
     except ValueError as exc:
         assert "exactly one of X or W" in str(exc)
@@ -177,7 +177,7 @@ def test_dreeb_requires_exactly_one_of_x_or_w():
 
 def test_cycle_with_stick_graph_simplifies_without_self_loops():
     W, _ = sample_cycle_with_stick_graph()
-    result = dreeb(W=W, return_raw=True, return_intermediates=True)
+    result = screebTower(W=W, return_raw=True, return_intermediates=True)
 
     simplified = result["simplified"]
     edges = simplified["edges"]
@@ -192,7 +192,7 @@ def test_custom_filter_values_run_through_main_api():
     n = W.shape[0]
     custom_filter = np.linspace(0.0, 1.0, n)
 
-    result = dreeb(
+    result = screebTower(
         W=W,
         filter_values=custom_filter,
         return_raw=True,
@@ -212,7 +212,7 @@ def test_diffusion_smoothing_t_zero_is_a_noop():
     X = sample_line()
     expected_W = build_affinity_matrix(X, k=8)
 
-    result = dreeb(
+    result = screebTower(
         X,
         k=8,
         t=0,
@@ -231,7 +231,7 @@ def test_diffusion_smoothing_t_zero_is_a_noop():
 def test_diffusion_smoothing_auto_rebuilds_affinity_from_smoothed_points():
     X = sample_line()
 
-    result = dreeb(
+    result = screebTower(
         X,
         k=8,
         t="auto",
@@ -252,7 +252,7 @@ def test_diffusion_smoothing_auto_rebuilds_affinity_from_smoothed_points():
 def test_diffusion_smoothing_accepts_explicit_k_smooth():
     X = sample_line()
 
-    result = dreeb(
+    result = screebTower(
         X,
         k=8,
         k_smooth=12,
@@ -271,13 +271,13 @@ def test_diffusion_smoothing_is_rejected_for_precomputed_affinity():
     W, _ = sample_cycle_with_stick_graph()
 
     try:
-        dreeb(W=W, t=1)
+        screebTower(W=W, t=1)
         assert False, "expected ValueError when t>0 is used with W"
     except ValueError as exc:
         assert "only supported when X is provided" in str(exc)
 
     try:
-        dreeb(W=W, t="auto")
+        screebTower(W=W, t="auto")
         assert False, "expected ValueError when t='auto' is used with W"
     except ValueError as exc:
         assert "requires X" in str(exc)

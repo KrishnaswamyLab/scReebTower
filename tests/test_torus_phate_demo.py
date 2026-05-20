@@ -8,8 +8,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import phate
 
-from dreeb import dreeb
-from dreeb.visualize import plot_dreeb
+from screebTower import screebTower
+from screebTower.visualize import plot_screebTower
 
 
 def sample_torus(n=800, R=2.0, r=0.7, seed=0):
@@ -30,7 +30,7 @@ def run_torus_demo(output_path="artifacts/torus_phate_reeb.png"):
     phate_op = phate.PHATE(n_components=2, random_state=0, knn=15, verbose=False)
     pts = phate_op.fit_transform(X)
 
-    result = dreeb(
+    result = screebTower(
         X,
         k=30,
         precision=1.0,
@@ -44,7 +44,7 @@ def run_torus_demo(output_path="artifacts/torus_phate_reeb.png"):
     raw = result["raw"]
     intermediates = result["intermediates"]
 
-    fig, _ = plot_dreeb(
+    fig, _ = plot_screebTower(
         pts=pts,
         simp_edges=simplified["edges"],
         keep_ids=simplified["keep_ids"],

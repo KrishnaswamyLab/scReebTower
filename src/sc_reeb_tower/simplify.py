@@ -183,7 +183,7 @@ def extract_cellular_trajectory(simplified_graph, cell_indices):
     Parameters
     ----------
     simplified_graph : dict
-        The `result["simplified"]` section returned by `dreeb(...)` with
+        The `result["simplified"]` section returned by `screebTower(...)` with
         `return_cellular_decomposition=True`.
     cell_indices : sequence of int
         Mixed cell indices in the combined node-then-edge indexing.
@@ -196,7 +196,7 @@ def extract_cellular_trajectory(simplified_graph, cell_indices):
     if "node_cells" not in simplified_graph or "edge_cells" not in simplified_graph:
         raise ValueError(
             "simplified_graph must contain `node_cells` and `edge_cells`; "
-            "run dreeb(..., return_cellular_decomposition=True)."
+            "run screebTower(..., return_cellular_decomposition=True)."
         )
 
     node_cells = simplified_graph["node_cells"]

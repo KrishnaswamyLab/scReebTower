@@ -85,7 +85,7 @@ def _loop_points_3d(center, radius, basis_u, basis_v, num=100):
     )
 
 
-def plot_dreeb(
+def plot_screebTower(
     pts,
     simp_edges,
     keep_ids,
@@ -105,7 +105,7 @@ def plot_dreeb(
     ----------
     pts : np.ndarray, shape (N, D)
         Embedding coordinates to plot on (2D or 3D). This is NOT computed
-        by the dreeb pipeline — pass in PHATE, UMAP, PCA, or any 2D/3D
+        by the screebTower pipeline — pass in PHATE, UMAP, PCA, or any 2D/3D
         embedding of your data.
     simp_edges : list of tuple
         Simplified edge list from simplify_reeb_graph
@@ -337,6 +337,6 @@ def plot_dreeb(
 
 def plot_reeb(*args, **kwargs):
     """
-    Backward-compatible alias for plot_dreeb().
+    Backward-compatible alias for plot_screebTower().
     """
-    return plot_dreeb(*args, **kwargs)
+    return plot_screebTower(*args, **kwargs)

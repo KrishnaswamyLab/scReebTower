@@ -1,10 +1,10 @@
-from .dreeb import dreeb
+from .screebTower import screebTower
 from .graph import build_affinity_matrix, build_diffusion_operator, validate_affinity_matrix
 from .filter import compute_diffusion_filter
 from .persistence import compute_edge_lengths, compute_graph_persistence
 from .reeb import prepare_reeb, build_reeb_graph
 from .io import save_reeb, load_reeb
-from .visualize import plot_dreeb
+from .visualize import plot_screebTower
 from .simplify import (
     simplify_reeb_graph,
     assign_points_to_simplified_nodes,
@@ -16,8 +16,8 @@ from .simplify import (
 )
 
 __all__ = [
-    "dreeb",
-    "plot_dreeb",
+    "screebTower",
+    "plot_screebTower",
     "save_reeb",
     "load_reeb",
     "extract_cellular_trajectory",
