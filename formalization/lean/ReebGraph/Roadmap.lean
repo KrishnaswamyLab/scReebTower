@@ -3597,12 +3597,89 @@ def proximityGraph
   symm _ _ h := ⟨h.1.symm, by simpa only [dist_comm] using h.2⟩
   loopless _ h := h.1 rfl
 
+/-! ### Radius-graph specialization -/
+
+/-- The standard epsilon-neighborhood graph is the proximity graph used by the
+graph-sandwich theorem.  This definition is intentionally just an alias: no
+additional graph construction is hidden here. -/
+def radiusGraph
+    (M : Type*) [PseudoMetricSpace M]
+    (V : Type*) (sample : V → M) (epsilon : ℝ) : SimpleGraph V :=
+  proximityGraph M V sample epsilon
+
 /-- Lower half of the graph sandwich: all sufficiently close distinct sample
 points are joined by an edge of `G`. -/
 def ContainsProximityGraph
     (M : Type*) [PseudoMetricSpace M]
     (V : Type*) (G : SimpleGraph V) (sample : V → M) (ρ : ℝ) : Prop :=
   proximityGraph M V sample ρ ≤ G
+
+/-- A radius graph satisfies both sides of the graph sandwich at its defining
+radius exactly. -/
+theorem radiusGraph_sandwich
+    (M : Type*) [PseudoMetricSpace M]
+    (V : Type*) (sample : V → M) (epsilon : ℝ) :
+    ContainsProximityGraph M V (radiusGraph M V sample epsilon) sample epsilon ∧
+      radiusGraph M V sample epsilon ≤ proximityGraph M V sample epsilon := by
+  constructor
+  · unfold ContainsProximityGraph radiusGraph
+    exact le_rfl
+  · unfold radiusGraph
+    exact le_rfl
+
+/-- The numerical scale choices used in the radius-graph corollary satisfy the
+three geometric inequalities required by the consistency theorem. -/
+theorem radiusGraph_scale_inequalities
+    {a σ : ℝ} (hpos : 0 < a + σ) (ha : 0 ≤ a) (hσ : 0 ≤ σ) :
+    2 * (a + σ) ≤ 5 * (a + σ) ∧
+      a + σ ≤ 2 * (a + σ) ∧
+      2 * (2 * (a + σ)) < 5 * (a + σ) := by
+  constructor
+  · nlinarith
+  constructor
+  · nlinarith
+  · nlinarith
+
+/-! ### k-nearest-neighbor graph interface -/
+
+/-- A certificate that a finite k-nearest-neighbor graph has the two metric
+scales required by the consistency theorem.  The integer `k` records the
+neighbor budget; the radii `ρ` and `r` are consequences of the sampling
+configuration and are not additional algorithmic parameters. -/
+structure KNNGraphCertificate
+    (M : Type*) [PseudoMetricSpace M]
+    (V : Type*) [Fintype V]
+    (sample : V → M) where
+  k : ℕ
+  graph : SimpleGraph V
+  lowerRadius : ℝ
+  upperRadius : ℝ
+  lower : ContainsProximityGraph M V graph sample lowerRadius
+  upper : graph ≤ proximityGraph M V sample upperRadius
+
+/-- The certified kNN graph satisfies the graph-sandwich hypotheses used by
+the Reeb consistency theorem. -/
+theorem KNNGraphCertificate.sandwich
+    {M : Type*} [PseudoMetricSpace M]
+    {V : Type*} [Fintype V]
+    {sample : V → M}
+    (c : KNNGraphCertificate M V sample) :
+    ContainsProximityGraph M V c.graph sample c.lowerRadius ∧
+      c.graph ≤ proximityGraph M V sample c.upperRadius := by
+  exact ⟨c.lower, c.upper⟩
+
+/-- Any certified kNN graph can be supplied directly to the packaged
+consistency theorem: all remaining assumptions are exactly the analytic and
+sampling hypotheses already exposed by `QuadraticGraphSandwichConsistencyHypotheses`.
+This separates the kNN geometry from the Reeb proof. -/
+theorem KNNGraphCertificate.uses_graph_sandwich
+    {M : Type*} [PseudoMetricSpace M]
+    {V : Type*} [Fintype V]
+    {sample : V → M}
+    (c : KNNGraphCertificate M V sample) :
+    ContainsProximityGraph M V c.graph sample c.lowerRadius ∧
+      c.graph ≤ proximityGraph M V sample c.upperRadius :=
+  c.sandwich
 
 /-- Every graph edge is realized by a continuum path that remains within `r`
 of its first endpoint.  On a Riemannian manifold this is supplied by a

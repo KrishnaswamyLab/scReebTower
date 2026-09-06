@@ -1,6 +1,8 @@
 import numpy as np
 
 from sc_reeb_tower import scReebTower, extract_cellular_trajectory, build_affinity_matrix
+from sc_reeb_tower.reeb import _build_reeb_graph, build_reeb_graph, prepare_reeb
+from sc_reeb_tower.simplify import simplify_reeb_graph
 import scipy.sparse as sp
 
 
@@ -39,6 +41,90 @@ def sample_cycle_with_stick_graph(cycle_nodes=18, stick_nodes=8):
     n = pts.shape[0]
     W = sp.csr_matrix((data, (rows, cols)), shape=(n, n))
     return W, pts
+
+
+def test_raw_reeb_graph_retains_isolated_slice_components():
+    step_vertices = [
+        np.array([0], dtype=np.int32),
+        np.array([1], dtype=np.int32),
+    ]
+    step_comp_ids = [
+        np.array([0], dtype=np.int32),
+        np.array([0], dtype=np.int32),
+    ]
+
+    nodes, edges = _build_reeb_graph(2, 2, step_vertices, step_comp_ids)
+
+    assert [(node["step"], node["comp"]) for node in nodes] == [(0, 0), (1, 0)]
+    assert edges == []
+
+
+def test_support_induced_slices_connect_four_neighbor_grid_levels():
+    side = 7
+    rows = []
+    cols = []
+    for row in range(side):
+        for col in range(side):
+            u = row * side + col
+            if col + 1 < side:
+                v = u + 1
+                rows.extend((u, v))
+                cols.extend((v, u))
+            if row + 1 < side:
+                v = u + side
+                rows.extend((u, v))
+                cols.extend((v, u))
+
+    adjacency = sp.csr_matrix(
+        (np.ones(len(rows)), (rows, cols)),
+        shape=(side * side, side * side),
+    )
+    filter_values = np.repeat(np.arange(side, dtype=float), side)
+
+    prep = prepare_reeb(adjacency, filter_values)
+    nodes, edges, _, component_ids = build_reeb_graph(prep)
+    simplified_edges, keep_ids, beta1, component_count = simplify_reeb_graph(
+        nodes, edges
+    )
+
+    assert all(np.unique(ids).size == 1 for ids in component_ids)
+    assert len(nodes) == side - 1
+    assert len(edges) == side - 2
+    assert keep_ids.size == 2
+    assert simplified_edges == [(0, 1)]
+    assert component_count == 1
+    assert beta1 == 0
+
+
+def test_interval_sweep_matches_naive_support_induced_components():
+    rng = np.random.default_rng(7)
+    vertex_count = 18
+    upper = rng.random((vertex_count, vertex_count)) < 0.16
+    upper = np.triu(upper, k=1)
+    upper[np.arange(vertex_count - 1), np.arange(1, vertex_count)] = True
+    adjacency = sp.csr_matrix(upper | upper.T, dtype=float)
+    filter_values = rng.permutation(vertex_count).astype(float)
+
+    prep = prepare_reeb(adjacency, filter_values)
+    _, _, step_vertices, step_comp_ids = build_reeb_graph(prep)
+    support_graph = sp.csr_matrix(
+        (
+            np.ones(2 * prep["base_ei_c"].size),
+            (
+                np.concatenate((prep["base_ei_c"], prep["base_ej_c"])),
+                np.concatenate((prep["base_ej_c"], prep["base_ei_c"])),
+            ),
+        ),
+        shape=(prep["M"], prep["M"]),
+    )
+
+    for vertices, component_ids in zip(step_vertices, step_comp_ids):
+        _, expected_ids = sp.csgraph.connected_components(
+            support_graph[vertices][:, vertices], directed=False
+        )
+        expected_same = expected_ids[:, None] == expected_ids[None, :]
+        actual_same = component_ids[:, None] == component_ids[None, :]
+        assert np.array_equal(actual_same, expected_same)
 
 
 def test_simplified_node_and_edge_assignments_cover_dataset():

@@ -4,7 +4,10 @@ from .filter import compute_diffusion_filter
 from .persistence import compute_edge_lengths, compute_graph_persistence
 from .reeb import prepare_reeb, build_reeb_graph
 from .io import save_reeb, load_reeb
-from .visualize import plot_scReebTower
+try:
+    from .visualize import plot_scReebTower
+except ImportError:  # Optional dependency for numerical-only environments.
+    plot_scReebTower = None
 from .simplify import (
     simplify_reeb_graph,
     assign_points_to_simplified_nodes,

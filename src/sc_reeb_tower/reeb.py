@@ -26,6 +26,8 @@ def prepare_reeb(W, filter_values):
         level_of : per-point index into alphas
         ei_c     : compacted source vertex of each active edge
         ej_c     : compacted destination vertex of each active edge
+        base_ei_c: compacted source vertex of each original support edge
+        base_ej_c: compacted destination vertex of each original support edge
         lmin     : lower level index of each active edge
         lmax     : upper level index of each active edge
         M        : number of active vertices
@@ -76,22 +78,22 @@ def prepare_reeb(W, filter_values):
 
     # keep only upper triangle to avoid duplicate edges
     mask_upper = A_coo.row < A_coo.col
-    ei = A_coo.row[mask_upper].astype(np.int32)
-    ej = A_coo.col[mask_upper].astype(np.int32)
-    E = ei.size
+    ei_all = A_coo.row[mask_upper].astype(np.int32)
+    ej_all = A_coo.col[mask_upper].astype(np.int32)
+    E = ei_all.size
 
     if E == 0:
         raise ValueError("No edges in W; cannot build Reeb graph.")
 
     # --- For each edge, compute its active midpoint interval [lmin, lmax) ---
-    li = level_of[ei]
-    lj = level_of[ej]
+    li = level_of[ei_all]
+    lj = level_of[ej_all]
     lmin = np.minimum(li, lj)
     lmax = np.maximum(li, lj)
 
     active = (lmin < lmax)
-    ei = ei[active]
-    ej = ej[active]
+    ei = ei_all[active]
+    ej = ej_all[active]
     lmin = lmin[active]
     lmax = lmax[active]
     E_active = ei.size
@@ -110,6 +112,11 @@ def prepare_reeb(W, filter_values):
 
     ei_c = old2new[ei]
     ej_c = old2new[ej]
+    base_ei_c = old2new[ei_all]
+    base_ej_c = old2new[ej_all]
+    support_edge = (base_ei_c >= 0) & (base_ej_c >= 0)
+    base_ei_c = base_ei_c[support_edge]
+    base_ej_c = base_ej_c[support_edge]
 
     return {
         "f": f,
@@ -118,6 +125,8 @@ def prepare_reeb(W, filter_values):
         "level_of": level_of,
         "ei_c": ei_c,
         "ej_c": ej_c,
+        "base_ei_c": base_ei_c,
+        "base_ej_c": base_ej_c,
         "lmin": lmin,
         "lmax": lmax,
         "M": M,
@@ -194,12 +203,67 @@ def _build_segment_tree(S, lmin, lmax):
     return size, tree_starts, tree_edges
 
 
+def _build_support_intervals(M, ei_c, ej_c, lmin, lmax, base_ei_c, base_ej_c):
+    """Find slice intervals where both endpoints of a base edge are active."""
+    vertex_intervals = [[] for _ in range(M)]
+    for u, v, start, end in zip(ei_c, ej_c, lmin, lmax):
+        interval = (int(start), int(end))
+        vertex_intervals[int(u)].append(interval)
+        vertex_intervals[int(v)].append(interval)
+
+    merged = []
+    for intervals in vertex_intervals:
+        intervals.sort()
+        merged_vertex = []
+        for start, end in intervals:
+            if merged_vertex and start <= merged_vertex[-1][1]:
+                previous_start, previous_end = merged_vertex[-1]
+                merged_vertex[-1] = (previous_start, max(previous_end, end))
+            else:
+                merged_vertex.append((start, end))
+        merged.append(merged_vertex)
+
+    support_u = []
+    support_v = []
+    support_lmin = []
+    support_lmax = []
+    for u, v in zip(base_ei_c, base_ej_c):
+        u = int(u)
+        v = int(v)
+        intervals_u = merged[u]
+        intervals_v = merged[v]
+        i = 0
+        j = 0
+        while i < len(intervals_u) and j < len(intervals_v):
+            start = max(intervals_u[i][0], intervals_v[j][0])
+            end = min(intervals_u[i][1], intervals_v[j][1])
+            if start < end:
+                support_u.append(u)
+                support_v.append(v)
+                support_lmin.append(start)
+                support_lmax.append(end)
+            if intervals_u[i][1] < intervals_v[j][1]:
+                i += 1
+            else:
+                j += 1
+
+    return (
+        np.asarray(support_u, dtype=np.int32),
+        np.asarray(support_v, dtype=np.int32),
+        np.asarray(support_lmin, dtype=np.int32),
+        np.asarray(support_lmax, dtype=np.int32),
+    )
+
+
 @njit
-def _reeb_levelsets_numba(M, S, size, tree_starts, tree_edges, ei_c, ej_c,
-                           step_vertices, step_comp_ids):
+def _reeb_levelsets_numba(M, S, size, tree_starts, tree_edges, edge_ei_c,
+                           edge_ej_c, crossing_edge_count, step_vertices,
+                           step_comp_ids):
     """
-    Segment tree DFS + rollback union-find to compute level-set
-    connected components at each midpoint slice.
+    Compute support-induced components at each midpoint slice.
+
+    Crossing edges determine the active vertices. Original graph edges join
+    endpoints over precomputed intervals where both endpoints are active.
     
     Mutates step_vertices[s] and step_comp_ids[s] in place for each slice s.
     """
@@ -210,7 +274,7 @@ def _reeb_levelsets_numba(M, S, size, tree_starts, tree_edges, ei_c, ej_c,
         parent[i] = i
         sizeUF[i] = 1
 
-    comps_active = 0
+    active_count = 0
 
     op_max  = 8 * tree_edges.shape[0] + 1
     op_type = np.empty(op_max, dtype=np.int8)
@@ -258,32 +322,33 @@ def _reeb_levelsets_numba(M, S, size, tree_starts, tree_edges, ei_c, ej_c,
             end   = tree_starts[node + 1]
             for idx in range(start, end):
                 eidx = tree_edges[idx]
-                u = ei_c[eidx]
-                v = ej_c[eidx]
+                u = edge_ei_c[eidx]
+                v = edge_ej_c[eidx]
 
-                if deg[u] == 0:
-                    deg[u] = 1
-                    comps_active += 1
-                    op_type[op_len] = 1
-                    op_v[op_len]    = u
-                    op_len += 1
-                else:
-                    deg[u] += 1
-                    op_type[op_len] = 2
-                    op_v[op_len]    = u
-                    op_len += 1
+                if eidx < crossing_edge_count:
+                    if deg[u] == 0:
+                        deg[u] = 1
+                        active_count += 1
+                        op_type[op_len] = 1
+                        op_v[op_len]    = u
+                        op_len += 1
+                    else:
+                        deg[u] += 1
+                        op_type[op_len] = 2
+                        op_v[op_len]    = u
+                        op_len += 1
 
-                if deg[v] == 0:
-                    deg[v] = 1
-                    comps_active += 1
-                    op_type[op_len] = 1
-                    op_v[op_len]    = v
-                    op_len += 1
-                else:
-                    deg[v] += 1
-                    op_type[op_len] = 2
-                    op_v[op_len]    = v
-                    op_len += 1
+                    if deg[v] == 0:
+                        deg[v] = 1
+                        active_count += 1
+                        op_type[op_len] = 1
+                        op_v[op_len]    = v
+                        op_len += 1
+                    else:
+                        deg[v] += 1
+                        op_type[op_len] = 2
+                        op_v[op_len]    = v
+                        op_len += 1
 
                 ru = uf_find(u)
                 rv = uf_find(v)
@@ -296,7 +361,6 @@ def _reeb_levelsets_numba(M, S, size, tree_starts, tree_edges, ei_c, ej_c,
                     sz_child    = sizeUF[rv]
                     parent[rv]  = ru
                     sizeUF[ru] += sz_child
-                    comps_active -= 1
                     op_type[op_len] = 0
                     op_rv[op_len]   = rv
                     op_ru[op_len]   = ru
@@ -305,7 +369,7 @@ def _reeb_levelsets_numba(M, S, size, tree_starts, tree_edges, ei_c, ej_c,
 
             if nr - nl == 1:
                 s = nl
-                if comps_active > 0:
+                if active_count > 0:
                     cnt = 0
                     for v in range(M):
                         if deg[v] > 0:
@@ -348,10 +412,9 @@ def _reeb_levelsets_numba(M, S, size, tree_starts, tree_edges, ei_c, ej_c,
                     if t == 0:
                         sizeUF[op_ru[op_len]] -= op_sz[op_len]
                         parent[op_rv[op_len]]  = op_rv[op_len]
-                        comps_active += 1
                     elif t == 1:
                         deg[op_v[op_len]] = 0
-                        comps_active -= 1
+                        active_count -= 1
                     elif t == 2:
                         deg[op_v[op_len]] -= 1
 
@@ -390,10 +453,9 @@ def _reeb_levelsets_numba(M, S, size, tree_starts, tree_edges, ei_c, ej_c,
                 if t == 0:
                     sizeUF[op_ru[op_len]] -= op_sz[op_len]
                     parent[op_rv[op_len]]  = op_rv[op_len]
-                    comps_active += 1
                 elif t == 1:
                     deg[op_v[op_len]] = 0
-                    comps_active -= 1
+                    active_count -= 1
                 elif t == 2:
                     deg[op_v[op_len]] -= 1
 
@@ -433,6 +495,12 @@ def _build_reeb_graph(S, M, step_vertices, step_comp_ids):
             reeb_nodes.append({"id": nid, "step": s, "comp": c})
         return nid
 
+    # A slice component is a Reeb node even when it has no support overlap with
+    # either neighboring slice.  Registering nodes first also gives stable IDs.
+    for s in range(S):
+        for c in np.unique(step_comp_ids[s]):
+            _get_node_id(s, int(c))
+
     if S >= 2:
         scratch = np.full(M, -1, dtype=np.int32)
         for s in range(S - 1):
@@ -464,8 +532,8 @@ def _build_reeb_graph(S, M, step_vertices, step_comp_ids):
 
 def build_reeb_graph(prep_state):
     """
-    Build the Reeb graph using midpoint slabbing with a segment tree
-    and rollback union-find (Numba-accelerated).
+    Build the Reeb graph using support-induced midpoint slabbing with a
+    segment tree and rollback union-find (Numba-accelerated).
 
     Parameters
     ----------
@@ -485,6 +553,8 @@ def build_reeb_graph(prep_state):
     """
     ei_c = prep_state["ei_c"].astype(np.int32)
     ej_c = prep_state["ej_c"].astype(np.int32)
+    base_ei_c = prep_state["base_ei_c"].astype(np.int32)
+    base_ej_c = prep_state["base_ej_c"].astype(np.int32)
     lmin = prep_state["lmin"]
     lmax = prep_state["lmax"]
     M    = int(prep_state["M"])
@@ -493,8 +563,21 @@ def build_reeb_graph(prep_state):
     if S <= 0 or ei_c.size == 0:
         raise ValueError("Nothing to do: no midpoints or no active edges.")
 
+    # Original graph edges join crossing endpoints exactly on the intervals
+    # where both endpoints are active crossing witnesses.
+    support_ei_c, support_ej_c, support_lmin, support_lmax = (
+        _build_support_intervals(
+            M, ei_c, ej_c, lmin, lmax, base_ei_c, base_ej_c
+        )
+    )
+    crossing_edge_count = int(ei_c.size)
+    edge_ei_c = np.concatenate((ei_c, support_ei_c)).astype(np.int32)
+    edge_ej_c = np.concatenate((ej_c, support_ej_c)).astype(np.int32)
+    edge_lmin = np.concatenate((lmin, support_lmin)).astype(np.int32)
+    edge_lmax = np.concatenate((lmax, support_lmax)).astype(np.int32)
+
     # 1) build segment tree
-    size, tree_starts, tree_edges = _build_segment_tree(S, lmin, lmax)
+    size, tree_starts, tree_edges = _build_segment_tree(S, edge_lmin, edge_lmax)
 
     # 2) allocate typed lists for numba
     step_vertices_nb = List()
@@ -507,7 +590,7 @@ def build_reeb_graph(prep_state):
     _reeb_levelsets_numba(
         M, S, size,
         tree_starts, tree_edges,
-        ei_c, ej_c,
+        edge_ei_c, edge_ej_c, crossing_edge_count,
         step_vertices_nb, step_comp_ids_nb
     )
 
