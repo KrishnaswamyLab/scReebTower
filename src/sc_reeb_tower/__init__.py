@@ -7,7 +7,11 @@ from .io import save_reeb, load_reeb
 try:
     from .visualize import plot_scReebTower
 except ImportError:  # Optional dependency for numerical-only environments.
-    plot_scReebTower = None
+    def plot_scReebTower(*args, **kwargs):
+        raise ImportError(
+            "plot_scReebTower requires matplotlib and networkx. "
+            "Install them with: pip install 'sc-reeb-tower[plot]'"
+        )
 from .simplify import (
     simplify_reeb_graph,
     assign_points_to_simplified_nodes,

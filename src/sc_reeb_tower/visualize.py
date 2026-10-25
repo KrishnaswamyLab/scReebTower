@@ -4,7 +4,8 @@ try:
     from matplotlib.patches import FancyArrowPatch
 except ImportError:
     raise ImportError(
-        "Visualization requires matplotlib and networkx."
+        "Visualization requires matplotlib and networkx. "
+        "Install them with: pip install 'sc-reeb-tower[plot]'"
     )
 
 import numpy as np

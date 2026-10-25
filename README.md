@@ -1,641 +1,113 @@
 # scReebTower
 
 `scReebTower` builds a discrete Reeb graph from a point cloud or a precomputed
-affinity graph.
+affinity graph. With `scReebTower`, it is possible to create a low dimensional
+representation of the shape of a point cloud.
 
-The main entrypoint is `sc_reeb_tower.scReebTower()`. By default it returns the simplified
-graph only and skips optional work such as persistence, point assignment, edge
-assignment, and large intermediate outputs. Provide either `X` or `W`:
-
-- `X`: a point cloud, from which `scReebTower` builds a kNN affinity graph
-- `W`: a precomputed affinity matrix, if you already have a better graph
-
-You can also optionally provide `filter_values` to use your own scalar filter
-instead of the built-in diffusion-based filters.
-
-You can also optionally provide `t` to apply diffusion smoothing to the point
-cloud before the affinity graph is built. Set `t=0` to disable smoothing, or
-`t="auto"` to choose a smoothing time from the PHATE-style Von Neumann entropy
-elbow. This preprocessing step affects the full downstream pipeline. By
-default, smoothing uses the historical fixed-operator mode,
-`X_smoothed = P^t X`. To run iterative diffusion condensation, set
-`smoothing_mode="condensation"` and choose the tower level with `ell`; this
-recomputes the affinity graph and diffusion operator at every level,
-`X^{(r+1)} = P_r^t X^{(r)}`. You can also pass `ell="auto"` to stop when
-the normalized mean displacement between condensation levels stabilizes.
-You can also optionally provide `k_smooth` to set the neighborhood size used
-only for the smoothing diffusion operator. If omitted, it defaults to
-`ceil(sqrt(n_samples))` when smoothing is enabled. The final scReebTower graph still
-uses the public `k`.
-
-The scalar filter is the first nontrivial diffusion eigenfunction computed
-separately on each connected component of the affinity graph. You can choose a
-later nontrivial eigenfunction with `diffusion_eigen_index`. As an
-alternative, you can use a rooted PHATE-style potential-distance filter with
-`filter_method="rooted_potential_distance"` or a rooted diffusion
-shortest-path filter with
-`filter_method="rooted_diffusion_shortest_path"`.
-
-For the rooted potential-distance filter, `scReebTower`:
-
-- builds the row-stochastic diffusion operator on each connected component
-- selects diffusion time with a PHATE-style Von Neumann entropy knee when
-  `diffusion_time="auto"`
-- computes `P^t`
-- chooses a root by two-sweep Dijkstra on the original sparse graph with edge
-  costs derived from `P^t`
-- uses rooted PHATE-style potential distance as the scalar filter
-
-For the rooted diffusion shortest-path filter, `scReebTower`:
-
-- builds the row-stochastic diffusion operator on each connected component
-- builds a diffusion cost graph on the original sparse graph directly from `P`
-- chooses a root by two-sweep Dijkstra on that cost graph
-- uses shortest-path distance from the root on that cost graph as the scalar
-  filter
+![Simplified scReebTower graph overlaid on a "sun" point cloud](docs/images/sun_example.png)
 
 ## Installation
 
-Install with pip:
+Install from GitHub with pip:
 
 ```bash
-pip install sc-reeb-tower
+pip install "sc-reeb-tower[plot] @ git+https://github.com/KrishnaswamyLab/scReebTower"
 ```
 
-After installation, both the main pipeline and plotting are available directly:
+The `[plot]` extra installs `matplotlib` and `networkx`, which `plot_scReebTower()`
+needs. Drop it for a numerical-only install.
 
-```python
-from sc_reeb_tower import (
-    scReebTower,
-    plot_scReebTower,
-    extract_cellular_trajectory,
-    enumerate_terminal_cellular_trajectories,
-)
+For development, clone the repository and install it in editable mode:
+
+```bash
+git clone https://github.com/KrishnaswamyLab/scReebTower
+cd scReebTower
+pip install -e ".[test]"
+pytest
 ```
 
 ## Quickstart
 
-```python
-from scReebTower import scReebTower
+Given a point cloud `X` (an `n_points × n_features` array, with any number of
+features) and a 2D or 3D `embedding` of it for plotting:
 
-result = scReebTower(X)
+```python
+from sc_reeb_tower import scReebTower, plot_scReebTower
+
+result = scReebTower(X, k=30, return_raw=True, return_intermediates=True)
 
 graph = result["simplified"]
-nodes = graph["nodes"]
-edges = graph["edges"]
-beta1 = graph["beta1"]
-```
+print("nodes:", len(graph["nodes"]))
+print("edges:", len(graph["edges"]))
+print("loops:", graph["beta1"])
 
-Or, using a precomputed affinity matrix:
-
-```python
-result = scReebTower(W=affinity_matrix)
-```
-
-Or, using a precomputed affinity matrix and a custom scalar filter:
-
-```python
-result = scReebTower(W=affinity_matrix, filter_values=my_filter)
-```
-
-Default return:
-
-- `result["primary_graph"] == "simplified"`
-- `result["simplified"]["nodes"]`
-- `result["simplified"]["edges"]`
-- `result["simplified"]["keep_ids"]`
-- `result["simplified"]["beta1"]`
-- `result["simplified"]["comp_count"]`
-
-If you want the raw graph instead:
-
-```python
-result = scReebTower(X, simplify=False)
-
-raw = result["raw"]
-nodes = raw["nodes"]
-edges = raw["edges"]
-```
-
-If you want to plot the result, request the raw graph and intermediates:
-
-```python
-from scReebTower import scReebTower, plot_scReebTower
-
-result = scReebTower(X, return_raw=True, return_intermediates=True)
-
-fig, node_pos = plot_scReebTower(
-    pts=embedding_2d,
-    simp_edges=result["simplified"]["edges"],
-    keep_ids=result["simplified"]["keep_ids"],
+fig, _ = plot_scReebTower(
+    pts=embedding,  # 2D or 3D, same row order as X
+    simp_edges=graph["edges"],
+    keep_ids=graph["keep_ids"],
     reeb_nodes=result["raw"]["nodes"],
     step_vertices=result["intermediates"]["step_vertices"],
     step_comp_ids=result["intermediates"]["step_comp_ids"],
     uniq_v=result["intermediates"]["prep_state"]["uniq_v"],
+    color_cycles=True,
+    label_degree=True,
 )
 ```
 
-## Result Structure
-
-`scReebTower()` returns a structured dictionary with stable top-level keys:
-
-- `primary_graph`: `"simplified"` or `"raw"`
-- `simplified`: simplified graph outputs when `simplify=True`
-- `raw`: raw graph outputs when requested, or when `simplify=False`
-- `intermediates`: internal construction outputs when requested
-
-Each section only contains the fields you asked for, but the top-level layout
-stays stable.
-
-## Main Options
-
-```python
-result = scReebTower(
-    X=X,
-    # or W=affinity_matrix,
-    # or W=affinity_matrix, filter_values=my_filter,
-    t=0,
-    ell=None,
-    k_smooth=None,
-    smoothing_mode="fixed_operator",
-    ell_max=20,
-    condensation_tol=1e-3,
-    condensation_patience=2,
-    t_max=100,
-    diffusion_eigen_index=1,
-    filter_method="diffusion_eigenfunction",
-    diffusion_time="auto",
-    return_raw=True,
-    return_edge_lengths=True,
-    return_simp_persistence=True,
-    return_raw_persistence=True,
-    return_point_assignment=True,
-    return_edge_assignment=True,
-    return_cellular_decomposition=True,
-    return_intermediates=True,
-)
-```
-
-- `return_raw=True`
-  Include the raw graph under `result["raw"]`.
-- `W=affinity_matrix`
-  Use a precomputed affinity matrix instead of building one from `X`.
-  Provide exactly one of `X` or `W`.
-- `filter_values=my_filter`
-  Use a user-supplied scalar filter on graph vertices. When provided,
-  `scReebTower` skips built-in filter construction and uses this vector directly.
-- `t=0`
-  Apply diffusion smoothing to the input point cloud before graph
-  construction. Set `0` to disable smoothing, pass an integer `t > 0` to use
-  diffusion smoothing, or pass `t="auto"` to choose a smoothing time from the
-  PHATE-style entropy elbow. In condensation mode, `t` is the diffusion power
-  applied at each tower level.
-- `ell=None`
-  Number of diffusion-condensation levels when
-  `smoothing_mode="condensation"`. For example, `ell=3, t=2` applies three
-  condensation levels, each using `P_ell^2` before recomputing the diffusion
-  operator for the next level. Pass `ell="auto"` to iterate until the
-  condensation process stabilizes. If omitted in condensation mode, `ell`
-  defaults to `1` when smoothing is enabled.
-- `smoothing_mode="fixed_operator"`
-  Smoothing mode used when `t > 0` or `t="auto"`. The default
-  `"fixed_operator"` computes `X_smoothed = P^t X` using one diffusion
-  operator built from the original point cloud, preserving historical behavior.
-  Set `"condensation"` to recompute the smoothing affinity graph and diffusion
-  operator at every tower level:
-  `X^{(r+1)} = P_r^t X^{(r)}`.
-- `ell_max=20`
-  Maximum number of condensation levels when `ell="auto"`.
-- `condensation_tol=1e-3`
-  Stabilization threshold for `ell="auto"`. At condensation level `r`, scReebTower
-  computes
-  `delta_r = mean_i ||X_i^(r+1) - X_i^(r)||_2 / median_i ||X_i^(0) - median(X^(0))||_2`.
-  A level is considered stable when `delta_r < condensation_tol`.
-- `condensation_patience=2`
-  Number of consecutive stable condensation levels required before
-  `ell="auto"` stops. If stabilization is not reached, condensation stops at
-  `ell_max`. The chosen level count and stop reason are returned in
-  `result["intermediates"]["condensation_levels"]` and
-  `result["intermediates"]["condensation_stop_reason"]`.
-- `k_smooth=None`
-  Neighborhood size used only to build the smoothing diffusion operator.
-  If omitted and smoothing is enabled, the default is `ceil(sqrt(n_samples))`.
-  This is separate from the public `k` used for the final Reeb graph.
-- `t_max=100`
-  Maximum time tested by the entropy-knee heuristic when `t="auto"`.
-- `diffusion_eigen_index=1`
-  Use the first nontrivial diffusion eigenfunction. Set `2`, `3`, ... to use
-  later nontrivial diffusion eigenfunctions. Ignored when
-  `filter_values` is provided.
-- `filter_method="diffusion_eigenfunction"`
-  Use the default diffusion-eigenfunction scalar filter, or set
-  `filter_method="rooted_potential_distance"` to use a rooted PHATE-style
-  potential-distance filter, or
-  `filter_method="rooted_diffusion_shortest_path"` to use shortest-path
-  distance from a root on the diffusion cost graph built directly from `P`.
-  Ignored when `filter_values` is provided.
-- `diffusion_time="auto"`
-  When using `filter_method="rooted_potential_distance"`, select diffusion
-  time with the entropy-knee heuristic. You can also pass an explicit integer.
-  Ignored for `rooted_diffusion_shortest_path` and when `filter_values` is
-  provided.
-- `return_edge_lengths=True`
-  Return filter-space edge lengths in the graph sections that are present.
-- `return_simp_persistence=True`
-  Return simplified graph persistence under `result["simplified"]["persistence"]`.
-- `return_raw_persistence=True`
-  Return raw graph persistence under `result["raw"]["persistence"]`.
-- `return_point_assignment=True`
-  Return node-level point ownership in the active graph section.
-- `return_edge_assignment=True`
-  Return edge-level support and ownership outputs in the graph sections.
-- `return_cellular_decomposition=True`
-  Return a mixed disjoint partition of all points onto simplified node cells
-  and simplified edge cells. Requires `simplify=True`.
-- `return_intermediates=True`
-  Return matrices and arrays needed for debugging or plotting.
-
-## Common Patterns
-
-Simplified graph plus raw graph:
-
-```python
-result = scReebTower(X, return_raw=True)
-
-simplified = result["simplified"]
-raw = result["raw"]
-```
-
-Simplified graph plus persistence:
-
-```python
-result = scReebTower(X, return_simp_persistence=True)
-
-h1 = result["simplified"]["persistence"]["h1"]
-```
-
-Use the second nontrivial diffusion eigenfunction:
-
-```python
-result = scReebTower(X, diffusion_eigen_index=2)
-```
-
-Use the rooted potential-distance filter:
-
-```python
-result = scReebTower(
-    X,
-    filter_method="rooted_potential_distance",
-    diffusion_time="auto",
-)
-```
-
-Use rooted diffusion shortest-path:
-
-```python
-result = scReebTower(
-    X,
-    filter_method="rooted_diffusion_shortest_path",
-)
-```
-
-Use a custom scalar filter:
-
-```python
-result = scReebTower(W=affinity_matrix, filter_values=my_filter)
-```
-
-Simplified graph plus node assignment:
-
-```python
-result = scReebTower(X, return_point_assignment=True)
-
-point_assignment = result["simplified"]["point_assignment"]
-node_points = result["simplified"]["node_points"]
-node_support_points = result["simplified"]["node_support_points"]
-```
-
-Simplified graph plus edge assignment:
-
-```python
-result = scReebTower(X, return_edge_assignment=True)
-
-edge_points = result["simplified"]["edge_points"]
-edge_support_points = result["simplified"]["edge_support_points"]
-point_edge_assignment = result["simplified"]["point_edge_assignment"]
-point_edges = result["simplified"]["point_edges"]
-```
-
-Simplified graph plus cellular decomposition:
-
-```python
-result = scReebTower(X, return_cellular_decomposition=True)
-
-cell_kind = result["simplified"]["cell_assignment_kind"]
-cell_id = result["simplified"]["cell_assignment_id"]
-node_cells = result["simplified"]["node_cells"]
-edge_cells = result["simplified"]["edge_cells"]
-```
-
-Raw persistence without returning raw edges explicitly:
-
-```python
-result = scReebTower(X, return_raw_persistence=True)
-
-raw_pd = result["raw"]["persistence"]
-```
-
-Inspect the filter metadata used during construction:
-
-```python
-result = scReebTower(
-    X,
-    filter_method="rooted_potential_distance",
-    return_intermediates=True,
-)
-
-meta = result["intermediates"]["filter_metadata"]
-root_ids = meta["component_root_indices"]
-root_pairs = meta["component_root_pairs"]
-times = result["intermediates"]["filter_aux_values"]
-```
-
-For the default diffusion-eigenfunction filter, `filter_aux_values` contains
-the selected per-component diffusion eigenvalues and is also available as
-`result["intermediates"]["diffusion_eigenvalues"]`. For the rooted
-potential-distance filter, `filter_aux_values` contains the selected
-per-component diffusion times.
-
-## Filter Modes
-
-`scReebTower()` supports three scalar filter constructions:
-
-- `filter_method="diffusion_eigenfunction"`
-- `filter_method="rooted_potential_distance"`
-- `filter_method="rooted_diffusion_shortest_path"`
-
-Or you can bypass filter construction entirely by passing
-`filter_values=...` into `scReebTower()`.
-
-`diffusion_eigenfunction`:
-
-- computed separately on each connected component of the affinity graph
-- uses the `diffusion_eigen_index`-th nontrivial diffusion eigenfunction
-- ignores `diffusion_time`
-
-`rooted_potential_distance`:
-
-- computed separately on each connected component of the affinity graph
-- uses PHATE-style potential distance from an automatically selected root
-- uses `diffusion_time`, or selects it automatically with a PHATE-style
-  entropy knee when `diffusion_time="auto"`
-- stores per-component root information in
-  `result["intermediates"]["filter_metadata"]` when
-  `return_intermediates=True`
-
-`rooted_diffusion_shortest_path`:
-
-- computed separately on each connected component of the affinity graph
-- builds the row-stochastic diffusion operator `P`
-- builds a diffusion cost graph on the original sparse graph using
-  `-log(0.5 * (P_ij + P_ji))`
-- chooses a root by two-sweep Dijkstra on that cost graph
-- uses shortest-path distance from the root on that cost graph as the scalar
-  filter
-- ignores `diffusion_time`
-
-Important note:
-
-- changing `diffusion_time` affects `rooted_potential_distance`
-- it does not affect `rooted_diffusion_shortest_path`
-- it does not meaningfully change the default single-eigenfunction filter,
-  because powering the diffusion operator changes eigenvalues but not
-  eigenvectors
-
-## Point Assignment
-
-Point assignment is opt-in via `return_point_assignment=True`.
-
-There are two related but different node-level outputs:
-
-- `node_points`: an ownership partition, one simplified/raw node id per point
-- `node_support_points`: the intrinsic local support of each node
-
-If you want the points supporting a trajectory through the simplified graph,
-use `edge_support_points` together with a graph path in
-`result["simplified"]["edges"]` and take the union of the edge supports along
-that path.
-
-When `simplify=True`:
-
-- `node_support_points` are inherited from the kept raw nodes
-- `node_points` are a full ownership partition of the dataset onto simplified
-  nodes
-- ownership is computed by graph Voronoi on the original point graph using
-  shortest-path distance on the symmetrized diffusion operator
-
-When `simplify=False`:
-
-- points are assigned to raw Reeb nodes
-
-Returned fields:
-
-- `point_assignment`: node index per point
-- `node_points`: ownership partition of points per node
-- `node_support_points`: intrinsic support points per node
-
-## Edge Assignment
-
-Edge assignment is opt-in via `return_edge_assignment=True`.
-
-Returned fields:
-
-- `edge_points`: ownership partition of points per edge
-- `point_edge_assignment`: one edge id per point
-- `edge_support_points`: intrinsic support points per edge
-- `point_edges`: overlapping edge-support memberships per point
-
-Raw edge assignment rule:
-
-- for a raw edge connecting `(step s, comp c)` to `(step s+1, comp c_next)`,
-  points are assigned if they lie in the connected bridging region across
-  levels `s, s+1, s+2` that touches both endpoint node supports
-
-Simplified edge assignment rule:
-
-- simplified edge support is inherited from the contracted raw path behind that
-  simplified edge
-- inherited support includes raw edge supports on that path plus the support
-  points of contracted interior raw nodes
-- simplified edge ownership is a full partition of the dataset onto simplified
-  edges
-- ownership is computed by graph Voronoi on the original point graph using
-  shortest-path distance on the symmetrized diffusion operator
-
-## Cellular Decomposition
-
-Cellular decomposition is opt-in via `return_cellular_decomposition=True` and
-is only defined on the simplified graph.
-
-It is a mixed disjoint partition of the whole dataset onto:
-
-- simplified node cells, corresponding to 0-cells
-- simplified edge cells, corresponding to 1-cells
-
-Returned fields:
-
-- `cell_assignment_kind`: per-point `"node"` or `"edge"`
-- `cell_assignment_id`: per-point simplified node id or simplified edge id
-- `node_cells`: list of point index arrays, one per simplified node
-- `edge_cells`: list of point index arrays, one per simplified edge
-
-This decomposition uses the same graph metric as the ownership assignments:
-shortest-path distance on the symmetrized diffusion operator, comparing node
-supports against edge supports directly.
-
-Helper for extracting points from selected cells:
-
-```python
-from scReebTower import extract_cellular_trajectory
-
-result = scReebTower(X, return_cellular_decomposition=True)
-simplified = result["simplified"]
-
-# Mixed cell indexing: nodes first, then edges.
-points = extract_cellular_trajectory(simplified, cell_indices=[0, 3, 7])
-```
-
-If there are `n` simplified nodes, then:
-
-- cell indices `0 .. n-1` are node cells
-- cell indices `n .. n + m - 1` are edge cells
-
-Helper for enumerating terminal cellular trajectories:
-
-```python
-from scReebTower import enumerate_terminal_cellular_trajectories
-
-result = scReebTower(
-    X,
-    return_edge_lengths=True,
-    return_cellular_decomposition=True,
-)
-trajectories = enumerate_terminal_cellular_trajectories(result["simplified"])
-
-top = trajectories[0]
-top["node_path"]
-top["edge_path"]
-top["cell_indices"]
-top["graph_length"]
-```
-
-Here, a terminal simplified node means a node whose multigraph degree is not
-equal to `2`, so trajectories run between leaf tips, branch points, isolated
-nodes, or loop anchors.
-
-## Edge Lengths
-
-Edge lengths are opt-in via `return_edge_lengths=True`.
-
-- `result["simplified"]["edge_lengths"]`: one filter-space length per simplified edge
-- `result["raw"]["edge_lengths"]`: one filter-space length per raw edge
-
-For an edge `(u, v)`, the length is the absolute difference between the
-midpoint slice values of its endpoint nodes.
-
-## Persistence
-
-Persistence is opt-in via `return_simp_persistence=True` and
-`return_raw_persistence=True`.
-
-This is graph-filtration persistence on the returned multigraph:
-
-- all vertices are born at filtration value `0`
-- edges are added in nondecreasing order of edge length
-- an edge that merges two connected components creates an `H0` death
-- an edge that closes a cycle creates an essential `H1` class with death `inf`
-
-Returned dictionary format:
-
-- `h0`: finite `H0` pairs with shape `(m, 2)`
-- `h0_essential`: essential `H0` pairs with shape `(c, 2)`
-- `h1`: essential `H1` pairs with shape `(k, 2)`
-
-Example:
-
-```python
-result = scReebTower(X, return_simp_persistence=True)
-pd = result["simplified"]["persistence"]
-
-h0 = pd["h0"]
-h1 = pd["h1"]
-```
-
-This is not higher-dimensional simplicial persistence; it is persistence of the
-edge-weighted graph itself.
-
-## Plotting
-
-`plot_scReebTower()` overlays the simplified graph on a 2D or 3D embedding that you
-compute separately. It works with the standard package install; there is no
-separate plotting extra or second install step.
-
-```python
-from scReebTower import scReebTower, plot_scReebTower
-
-result = scReebTower(X, return_raw=True, return_intermediates=True)
-
-fig, node_pos = plot_scReebTower(
-    pts=embedding_2d,
-    simp_edges=result["simplified"]["edges"],
-    keep_ids=result["simplified"]["keep_ids"],
-    reeb_nodes=result["raw"]["nodes"],
-    step_vertices=result["intermediates"]["step_vertices"],
-    step_comp_ids=result["intermediates"]["step_comp_ids"],
-    uniq_v=result["intermediates"]["prep_state"]["uniq_v"],
-)
-```
-
-Practical notes:
-
-- `pts` must be a 2D or 3D embedding in the same row order as `X`
-- if you ran `scReebTower(W=...)`, `pts` must instead match the row order of `W`
-- 2D multiedges are drawn as curved arcs so parallel edges are legible
-- cycle edges are colored crimson when `color_cycles=True`
-- node labels show multigraph degree when `label_degree=True`
-- the function returns `(fig, node_pos)` so you can save or modify the figure
-
-## Index Alignment
-
-`plot_scReebTower()` assumes the embedding array `pts` is aligned row-for-row with the
-nodes of the graph passed to `scReebTower()`: the rows of `X` when using `X=...`, or
-the rows of `W` when using `W=...`.
-
-How node membership is recovered for plotting:
-
-- each raw Reeb node is identified by `(step, comp)` in `reeb_nodes`
-- `step_vertices[step]` gives the compacted active vertex indices in that slice
-- `step_comp_ids[step]` gives the component id for each active vertex
-- compacted indices map back to original point indices through
-  `prep_state["uniq_v"]`
-- those original indices are used to index into `pts` and compute node centroids
-
-If you shuffle or subset your data before embedding, apply the same
-transformation to both `X` and `pts`, or remap indices accordingly.
-
-## Workflow Guide
-
-Typical calls:
-
-- topology only:
-  `result = scReebTower(X)`
-- topology plus raw graph:
-  `result = scReebTower(X, return_raw=True)`
-- topology plus persistence:
-  `result = scReebTower(X, return_simp_persistence=True)`
-- topology plus node ownership:
-  `result = scReebTower(X, return_point_assignment=True)`
-- topology plus edge ownership:
-  `result = scReebTower(X, return_edge_assignment=True)`
-- topology plus plotting support:
-  `result = scReebTower(X, return_raw=True, return_intermediates=True)`
+With only `scReebTower(X)`, you get the simplified graph and nothing else. The
+`return_*` options add more outputs; here, `return_raw` and
+`return_intermediates` provide what the plot needs. You can also pass a
+precomputed affinity matrix with `scReebTower(W=...)`, or your own filter with
+`filter_values=...`.
+
+The figure above shows the result on the "sun" point cloud from the
+[tutorial](notebooks/screebTower_tutorial.ipynb), which yields 16 nodes,
+16 edges, and 1 loop.
+
+### High-dimensional data
+
+`scReebTower` works directly on high-dimensional data. Only plotting needs a 
+low-dimensional view. `plot_scReebTower()` uses `pts` to place each node at the 
+mean position of its points, so `pts` must have 2 or 3 columns, for example a 
+PHATE, UMAP, or PCA embedding. Its rows must be in the same order as the rows of 
+`X`. If `X` is already 2D or 3D, you can pass `pts=X`.
+
+`scReebTower` does not reduce dimensions itself. For data with very many
+features, such as raw gene counts, it is usually better to pass a reduced
+representation.
+
+## What else it does
+
+- **Filters:** diffusion eigenfunctions (`diffusion_eigen_index`), rooted
+  potential distance, rooted diffusion shortest paths, or a filter you supply.
+- **Diffusion smoothing and condensation** before graph construction (`t`,
+  `smoothing_mode`, `ell`).
+- **Point and edge assignment:** which cells support or belong to each node and
+  edge.
+- **Cellular decomposition and trajectories:** partition every cell onto graph
+  nodes and edges, and enumerate branch-to-branch trajectories.
+- **Graph persistence** of the simplified or raw graph.
+
+## Documentation
+
+- [Tutorial notebook](notebooks/screebTower_tutorial.ipynb): torus, hollow
+  cylinder, and sun examples, with plots.
+- [Common workflows](docs/workflows.md): short recipes for frequent tasks.
+- [Options and filters](docs/options.md): every parameter of `scReebTower()`,
+  the result structure, and how each filter is built.
+- [Assignments, cellular decomposition, and persistence](docs/outputs.md):
+  the optional outputs and how they are computed.
+- [Plotting](docs/plotting.md): `plot_scReebTower()` and index alignment.
+- [`examples/`](examples): grid sanity checks with known answers.
+- [`formalization/lean`](formalization/lean): Lean formalization of the
+  construction's consistency.
+
+## Citation
+
+<!-- TODO: add the paper reference or a CITATION.cff once available. -->
+A citation will be added once the accompanying paper is available.
+
+## License
+
+<!-- TODO: add a LICENSE file and name it here. -->
+License to be determined.

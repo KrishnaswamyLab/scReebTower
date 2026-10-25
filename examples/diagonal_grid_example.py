@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import scipy.sparse as sp
 
-from degree4_grid_counterexample import (
+from vertical_grid_example import (
     four_neighbor_square,
     plot_edges,
     raw_node_positions,

@@ -206,7 +206,7 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("artifacts/degree4_grid_reeb_output.png"),
+        default=Path("artifacts/vertical_grid_reeb_output.png"),
     )
     args = parser.parse_args()
 
