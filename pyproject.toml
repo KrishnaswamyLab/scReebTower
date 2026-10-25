@@ -7,15 +7,18 @@ name = "sc-reeb-tower"
 version = "0.1.0"
 description = "Discrete Reeb graphs from point clouds and affinity graphs via diffusion filters."
 readme = "README.md"
-# TODO: choose a license with the lab, add a LICENSE file, and set e.g. license = "MIT"
+license = { file = "LICENSE.md" }
 authors = [
-    { name = "Zack Warren" },
+    { name = "Andrew J Steindl"},
+    { name = "João Felipe Rocha"},
+    { name = "Zack Warren"},
     # TODO: add co-authors / Krishnaswamy Lab
 ]
 requires-python = ">=3.8"
 keywords = ["reeb graph", "topological data analysis", "single-cell", "diffusion"]
 classifiers = [
     "Programming Language :: Python :: 3",
+    "License :: Free for non-commercial use",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
     "Topic :: Scientific/Engineering :: Mathematics",

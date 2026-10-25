@@ -104,10 +104,23 @@ representation.
 
 ## Citation
 
-<!-- TODO: add the paper reference or a CITATION.cff once available. -->
-A citation will be added once the accompanying paper is available.
+If you use `scReebTower` in your work, please cite:
+
+```bibtex
+@misc{steindl2026scshapebench,
+  title         = {scShapeBench: Discovering geometry from high dimensional scRNAseq data},
+  author        = {Steindl, Andrew J and Rocha, Jo{\~a}o Felipe and Di Bassinga, Brian Tshilengi and Warren, Zachary and Scicluna, Matthew and Valdez C{\'o}rdova, C{\'e}sar Miguel and Gupta, Shabarni and Torices, Leire and Neumann, Daniel and Mann, Timothy J. and Gunawan, Ihuan and Bhaskar, Dhananjay and Lock, John G and Chaffer, Christine L and Wolf, Guy and Krishnaswamy, Smita},
+  year          = {2026},
+  eprint        = {2605.12662},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+  doi           = {10.48550/arXiv.2605.12662},
+  url           = {https://arxiv.org/abs/2605.12662}
+}
+```
 
 ## License
 
-<!-- TODO: add a LICENSE file and name it here. -->
-License to be determined.
+`scReebTower` is free for non-commercial use under the Yale Non-Commercial
+License; see [LICENSE.md](LICENSE.md). For commercial licensing, contact Yale
+Ventures at yaleventures@yale.edu.
